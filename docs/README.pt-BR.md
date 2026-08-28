@@ -4,11 +4,11 @@
 
 O Sam Harness transforma a arquitetura, os comandos, o caminho até produção e os riscos reais de um repositório em instruções duráveis para agentes de programação. Ele não joga um prompt enorme em toda conversa. Uma skill portátil orienta a adoção, um CLI em Go cria planos e checks determinísticos, e os arquivos instalados mantêm as regras ativas depois que o chat termina.
 
-O método vem do livro [Development Harness](https://www.samuelfaj.com/books/development-harness-couse/development-harness-course.html), de Samuel Fajreldines.
+O método vem do livro [Development Harness](https://www.samuelfaj.com/books/development-harness-course/development-harness-course.html), de Samuel Fajreldines.
 
-[![Fluxo do Development Harness, das regras do repositório à produção segura](../assets/sam-harness.png)](https://www.samuelfaj.com/books/development-harness-couse/development-harness-course.html)
+[![Fluxo do Development Harness, das regras do repositório à produção segura](../assets/sam-harness.png)](https://www.samuelfaj.com/books/development-harness-course/development-harness-course.html)
 
-Leia o livro: [🇧🇷 Português](https://www.samuelfaj.com/books/development-harness-couse/development-harness-course.html) · [🇺🇸 English](https://www.samuelfaj.com/books/development-harness-couse/development-harness-course.en-US.html) · [🇪🇸 Español](https://www.samuelfaj.com/books/development-harness-couse/development-harness-course.es.html)
+Leia o livro: [🇧🇷 Português](https://www.samuelfaj.com/books/development-harness-course/development-harness-course.html) · [🇺🇸 English](https://www.samuelfaj.com/books/development-harness-course/development-harness-course.en-US.html) · [🇪🇸 Español](https://www.samuelfaj.com/books/development-harness-course/development-harness-course.es.html)
 
 ## Instale a skill
 
