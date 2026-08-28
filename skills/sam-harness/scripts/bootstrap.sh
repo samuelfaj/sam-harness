@@ -32,12 +32,10 @@ trap 'rm -rf "$SAM_HARNESS_TEMP_DIR"' EXIT HUP INT TERM
 
 curl -fsSL "${SAM_HARNESS_BASE_URL}/${SAM_HARNESS_ARCHIVE}" -o "${SAM_HARNESS_TEMP_DIR}/${SAM_HARNESS_ARCHIVE}"
 curl -fsSL "${SAM_HARNESS_BASE_URL}/checksums.txt" -o "${SAM_HARNESS_TEMP_DIR}/checksums.txt"
-curl -fsSL "${SAM_HARNESS_BASE_URL}/checksums.txt.sig" -o "${SAM_HARNESS_TEMP_DIR}/checksums.txt.sig"
-curl -fsSL "${SAM_HARNESS_BASE_URL}/checksums.txt.pem" -o "${SAM_HARNESS_TEMP_DIR}/checksums.txt.pem"
+curl -fsSL "${SAM_HARNESS_BASE_URL}/checksums.txt.bundle" -o "${SAM_HARNESS_TEMP_DIR}/checksums.txt.bundle"
 
 cosign verify-blob \
-  --certificate "${SAM_HARNESS_TEMP_DIR}/checksums.txt.pem" \
-  --signature "${SAM_HARNESS_TEMP_DIR}/checksums.txt.sig" \
+  --bundle "${SAM_HARNESS_TEMP_DIR}/checksums.txt.bundle" \
   --certificate-identity-regexp '^https://github.com/samuelfaj/sam-harness/.github/workflows/release.yml@refs/tags/v' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   "${SAM_HARNESS_TEMP_DIR}/checksums.txt"
