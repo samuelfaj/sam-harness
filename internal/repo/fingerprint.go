@@ -140,7 +140,7 @@ func treeFingerprint(root string) (string, error) {
 
 func ignoredDir(name string) bool {
 	switch name {
-	case ".git", "node_modules", "vendor", "target", "dist", "build", ".venv", ".tox", ".mypy_cache", ".pytest_cache", "__pycache__":
+	case ".git", "node_modules", "vendor", "target", "dist", "build", ".venv", ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache", "__pycache__":
 		return true
 	default:
 		return false

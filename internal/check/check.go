@@ -44,10 +44,14 @@ func Run(path string, writeReceipt bool) (model.CheckReport, string, error) {
 		if phaseErr != nil {
 			report.Passed = false
 		}
+		failedCommandRecorded := false
 		for _, command := range phaseReceipt.Commands {
 			stage := command.Stage
 			if stage == "" {
 				stage = string(command.Phase)
+			}
+			if command.Required && !command.Passed && !command.Skipped {
+				failedCommandRecorded = true
 			}
 			report.Results = append(report.Results, model.GateResult{
 				Name:       command.Name,
@@ -62,6 +66,22 @@ func Run(path string, writeReceipt bool) (model.CheckReport, string, error) {
 				Output:     command.Output,
 				StartedAt:  command.StartedAt,
 				FinishedAt: command.FinishedAt,
+			})
+		}
+		if phaseErr != nil && !failedCommandRecorded {
+			startedAt := time.Now().UTC()
+			finishedAt := time.Now().UTC()
+			report.Results = append(report.Results, model.GateResult{
+				Name:       fmt.Sprintf("%s phase boundary", phase),
+				Stage:      string(phase),
+				Workdir:    ".",
+				Required:   true,
+				Passed:     false,
+				ExitCode:   -1,
+				Duration:   finishedAt.Sub(startedAt),
+				Output:     phaseErr.Error(),
+				StartedAt:  startedAt,
+				FinishedAt: finishedAt,
 			})
 		}
 	}

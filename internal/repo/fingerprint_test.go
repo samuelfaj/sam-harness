@@ -32,13 +32,38 @@ func TestTreeFingerprintChangesWithFileContent(t *testing.T) {
 
 func TestIgnoredUntrackedPathExcludesBuildAndEvidenceArtifacts(t *testing.T) {
 	t.Parallel()
-	for _, path := range []string{"target/debug/app", "node_modules/pkg/index.js", ".venv/bin/python", ".sam-harness/evidence/receipt.json"} {
+	for _, path := range []string{"target/debug/app", "node_modules/pkg/index.js", ".venv/bin/python", ".ruff_cache/0.14.9/cache", ".sam-harness/evidence/receipt.json"} {
 		if !ignoredUntrackedPath(path) {
 			t.Fatalf("ignoredUntrackedPath(%q) = false", path)
 		}
 	}
 	if ignoredUntrackedPath("src/targeting.go") {
 		t.Fatal("ignoredUntrackedPath excluded a normal source file")
+	}
+}
+
+func TestTreeFingerprintIgnoresRuffCacheCreatedByAFirstCheck(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.py"), []byte("value = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := Fingerprint(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".ruff_cache", "0.14.9"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".ruff_cache", "0.14.9", "cache"), []byte("generated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after, err := Fingerprint(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatal("Fingerprint() treated Ruff's rebuildable cache as source mutation")
 	}
 }
 

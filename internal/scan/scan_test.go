@@ -2,9 +2,12 @@ package scan
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/samuelfaj/sam-harness/internal/repo"
 )
 
 func TestRunDetectsEverySupportedStackInMixedRepository(t *testing.T) {
@@ -133,6 +136,46 @@ func TestRunAsksWhenPackageManagerCannotBeProven(t *testing.T) {
 	}
 	if !containsQuestion(result.Questions, "commands:typescript:.") {
 		t.Fatalf("Questions = %v, want package-manager decision", result.Questions)
+	}
+}
+
+func TestDetectedGoBuildCheckDoesNotWriteSingleMainBinary(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/single-main\n\ngo 1.27.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Run(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Stacks) != 1 {
+		t.Fatalf("Stacks = %#v, want one Go stack", result.Stacks)
+	}
+	command := result.Stacks[0].Commands["build"]
+	if len(command) == 0 {
+		t.Fatal("Go build verification command was not detected")
+	}
+	before, err := repo.Fingerprint(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(command[0], command[1:]...)
+	cmd.Dir = root
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("detected Go build verification failed: %v\n%s", err, output)
+	}
+	after, err := repo.Fingerprint(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatal("detected Go build verification mutated the repository")
+	}
+	if _, err := os.Stat(filepath.Join(root, filepath.Base(root))); !os.IsNotExist(err) {
+		t.Fatalf("single-main binary was written into the repository: %v", err)
 	}
 }
 

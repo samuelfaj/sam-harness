@@ -12,7 +12,7 @@ Read `pyproject.toml` before selecting commands. Use configured pytest, Ruff, an
 
 ## Go
 
-Use module boundaries from `go.mod`. Standard gates are `go test ./...`, `go vet ./...`, and `go build ./...`. Add repository-specific integration, race, fuzz, or migration checks only when the codebase already defines them or the user approves their introduction.
+Use module boundaries from `go.mod`. Standard gates are `go test ./...`, `go vet ./...`, and `go test -run=^$ ./...` as a compile-only check that does not leave a single-main binary in the repository. Add repository-specific integration, race, fuzz, or migration checks only when the codebase already defines them or the user approves their introduction.
 
 ## Rust
 

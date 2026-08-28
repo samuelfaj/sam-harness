@@ -429,7 +429,7 @@ func TestRepairCopyKeepsRunnableDependenciesAndSkipsRebuildableCaches(t *testing
 	for _, path := range []string{"node_modules/pkg/keep.txt", "vendor/pkg/keep.txt", ".venv/keep.txt"} {
 		writeFile(t, root, path, "required\n")
 	}
-	for _, path := range []string{"target/skip.txt", "dist/skip.txt", "build/skip.txt", ".tox/skip.txt", ".mypy_cache/skip.txt", ".pytest_cache/skip.txt", "pkg/__pycache__/skip.txt"} {
+	for _, path := range []string{"target/skip.txt", "dist/skip.txt", "build/skip.txt", ".tox/skip.txt", ".mypy_cache/skip.txt", ".pytest_cache/skip.txt", ".ruff_cache/skip.txt", "pkg/__pycache__/skip.txt"} {
 		writeFile(t, root, path, "rebuildable\n")
 	}
 	writeFile(t, root, "target.txt", "broken\n")
@@ -444,6 +444,7 @@ test ! -e build/skip.txt
 test ! -e .tox/skip.txt
 test ! -e .mypy_cache/skip.txt
 test ! -e .pytest_cache/skip.txt
+test ! -e .ruff_cache/skip.txt
 test ! -e pkg/__pycache__/skip.txt
 printf 'fixed\n' > target.txt
 `)

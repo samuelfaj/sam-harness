@@ -636,7 +636,7 @@ func shouldSkipCopiedDirectory(name string, purpose repositoryCopyPurpose) bool 
 		return ignoredSourceDirectory(name)
 	}
 	switch name {
-	case "target", "dist", "build", ".tox", ".mypy_cache", ".pytest_cache", "__pycache__":
+	case "target", "dist", "build", ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache", "__pycache__":
 		return true
 	default:
 		return false
@@ -672,7 +672,7 @@ func initializeSandboxGit(root string) error {
 	if err := os.MkdirAll(filepath.Join(root, ".git", "info"), 0o755); err != nil {
 		return fmt.Errorf("create sandbox Git info directory: %w", err)
 	}
-	excludes := "node_modules/\nvendor/\ntarget/\ndist/\nbuild/\n.venv/\n.tox/\n.mypy_cache/\n.pytest_cache/\n__pycache__/\n.sam-harness/evidence/\n"
+	excludes := "node_modules/\nvendor/\ntarget/\ndist/\nbuild/\n.venv/\n.tox/\n.mypy_cache/\n.pytest_cache/\n.ruff_cache/\n__pycache__/\n.sam-harness/evidence/\n"
 	if err := os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte(excludes), 0o644); err != nil {
 		return err
 	}

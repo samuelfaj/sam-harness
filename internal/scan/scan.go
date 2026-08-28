@@ -189,7 +189,7 @@ func detectGo(dir string) model.Stack {
 	return model.Stack{Kind: "go", Path: dir, PackageManager: "go", Commands: map[string][]string{
 		"test":      {"go", "test", "./..."},
 		"typecheck": {"go", "vet", "./..."},
-		"build":     {"go", "build", "./..."},
+		"build":     {"go", "test", "-run=^$", "./..."},
 	}}
 }
 

@@ -3,6 +3,7 @@ package check
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,6 +100,41 @@ func TestRunIncludesExecutedAndWaivedWorkflowGuards(t *testing.T) {
 	}
 	if !report.Results[1].Skipped || report.Results[1].Passed || report.Results[1].Output == "" {
 		t.Fatalf("waiver was disguised as execution: %#v", report.Results[1])
+	}
+}
+
+func TestRunReportsPhaseBoundaryWhenPassingGateMutatesRepository(t *testing.T) {
+	root := t.TempDir()
+	script := filepath.Join(root, "mutate.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'generated\\n' > generated.txt\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig()
+	cfg.Gates = []model.Gate{{
+		Name: "passing command with forbidden side effect", Stage: "local", Workdir: ".",
+		Command: []string{"./mutate.sh"}, Required: true,
+	}}
+	writeConfig(t, root, cfg)
+
+	report, _, err := Run(root, false)
+	if err == nil {
+		t.Fatal("Run() succeeded after a passing gate mutated the repository")
+	}
+	if report.Passed {
+		t.Fatal("report.Passed = true after a phase boundary failure")
+	}
+	if len(report.Results) != 2 || !report.Results[0].Passed || report.Results[1].Passed {
+		t.Fatalf("results = %#v, want a passing command followed by a failing phase boundary", report.Results)
+	}
+	boundary := report.Results[1]
+	if boundary.Name != "static phase boundary" || !boundary.Required || boundary.ExitCode != -1 {
+		t.Fatalf("boundary result = %#v", boundary)
+	}
+	if !strings.Contains(boundary.Output, "mutated the repository") {
+		t.Fatalf("boundary output = %q, want the specific mutation error", boundary.Output)
+	}
+	if boundary.StartedAt.IsZero() || boundary.FinishedAt.Before(boundary.StartedAt) {
+		t.Fatalf("boundary timing was not recorded: %#v", boundary)
 	}
 }
 
