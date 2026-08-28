@@ -68,7 +68,7 @@ func Run(path string, writeReceipt bool) (model.CheckReport, string, error) {
 				FinishedAt: command.FinishedAt,
 			})
 		}
-		if phaseErr != nil && !failedCommandRecorded {
+		if phaseErr != nil && (!failedCommandRecorded || phaseReceipt.Status == pipeline.StatusBlocked) {
 			startedAt := time.Now().UTC()
 			finishedAt := time.Now().UTC()
 			report.Results = append(report.Results, model.GateResult{

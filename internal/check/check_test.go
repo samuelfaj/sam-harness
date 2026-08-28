@@ -138,6 +138,35 @@ func TestRunReportsPhaseBoundaryWhenPassingGateMutatesRepository(t *testing.T) {
 	}
 }
 
+func TestRunPreservesMutationBoundaryWhenMutatingGateAlsoFails(t *testing.T) {
+	root := t.TempDir()
+	script := filepath.Join(root, "fail-and-mutate.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'generated\\n' > generated.txt\nexit 7\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig()
+	cfg.Gates = []model.Gate{{
+		Name: "failing command with forbidden side effect", Stage: "local", Workdir: ".",
+		Command: []string{"./fail-and-mutate.sh"}, Required: true,
+	}}
+	writeConfig(t, root, cfg)
+
+	report, _, err := Run(root, false)
+	if err == nil {
+		t.Fatal("Run() succeeded after a failing gate mutated the repository")
+	}
+	if len(report.Results) != 2 {
+		t.Fatalf("results = %#v, want both command failure and phase-boundary evidence", report.Results)
+	}
+	command, boundary := report.Results[0], report.Results[1]
+	if command.Passed || command.ExitCode != 7 {
+		t.Fatalf("command result = %#v, want exit code 7", command)
+	}
+	if boundary.Passed || boundary.Name != "static phase boundary" || !strings.Contains(boundary.Output, "mutated the repository") {
+		t.Fatalf("boundary result = %#v, want the specific mutation error", boundary)
+	}
+}
+
 func testConfig() model.Config {
 	return model.Config{
 		SchemaVersion:  model.SchemaVersion,
