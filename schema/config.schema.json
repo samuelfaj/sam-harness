@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/samuelfaj/sam-harness/schema/config.schema.json",
+  "title": "sam-harness configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "harness_version",
+    "profile",
+    "repository",
+    "stacks",
+    "gates",
+    "authority",
+    "evidence",
+    "ci",
+    "release",
+    "migration",
+    "design",
+    "governance"
+  ],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "harness_version": { "type": "string", "minLength": 1 },
+    "profile": { "enum": ["baseline", "production", "regulated"] },
+    "repository": { "type": "string", "minLength": 1 },
+    "stacks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/stack" }
+    },
+    "gates": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/gate" }
+    },
+    "authority": { "$ref": "#/$defs/authority" },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receipt_directory", "required_states"],
+      "properties": {
+        "receipt_directory": { "type": "string", "minLength": 1 },
+        "required_states": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+      }
+    },
+    "ci": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providers", "managed", "branch_protection_required"],
+      "properties": {
+        "providers": { "type": "array", "items": { "enum": ["github", "gitlab"] }, "uniqueItems": true },
+        "managed": { "type": "boolean" },
+        "branch_protection_required": { "type": "boolean" },
+        "setup_commands": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "github": { "type": "array", "items": { "$ref": "#/$defs/setup_command" }, "minItems": 1 },
+            "gitlab": { "type": "array", "items": { "$ref": "#/$defs/setup_command" }, "minItems": 1 }
+          }
+        },
+        "setup_waivers": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "github": { "type": "string", "minLength": 1 },
+            "gitlab": { "type": "string", "minLength": 1 }
+          }
+        },
+        "gitlab_image": { "type": "string", "minLength": 1 }
+      }
+    },
+    "release": { "$ref": "#/$defs/release" },
+    "migration": { "$ref": "#/$defs/migration" },
+    "design": { "$ref": "#/$defs/design" },
+    "governance": { "$ref": "#/$defs/governance" },
+    "metadata": { "type": "object", "additionalProperties": { "type": "string" } }
+  },
+  "$defs": {
+    "stack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "ui", "persistence"],
+      "properties": {
+        "kind": { "enum": ["typescript", "python", "go", "rust"] },
+        "path": { "type": "string", "minLength": 1 },
+        "package_manager": { "type": "string" },
+        "commands": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1
+          }
+        },
+        "ui": { "type": "boolean" },
+        "persistence": { "type": "boolean" }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "stage", "workdir", "command", "required"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "stage": { "enum": ["local", "ci", "release", "production"] },
+        "workdir": { "type": "string", "minLength": 1 },
+        "command": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "required": { "type": "boolean" }
+      }
+    },
+    "setup_command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workdir", "command"],
+      "properties": {
+        "workdir": { "type": "string", "minLength": 1 },
+        "command": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["write_repository", "network", "commit", "push", "release", "deploy"],
+      "properties": {
+        "write_repository": { "type": "boolean" },
+        "network": { "type": "boolean" },
+        "commit": { "type": "boolean" },
+        "push": { "type": "boolean" },
+        "release": { "type": "boolean" },
+        "deploy": { "type": "boolean" }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["immutable_artifact", "sbom", "provenance", "promotion_required"],
+      "properties": {
+        "immutable_artifact": { "type": "boolean" },
+        "sbom": { "type": "boolean" },
+        "provenance": { "type": "boolean" },
+        "promotion_required": { "type": "boolean" },
+        "rollback_owner": { "type": "string" },
+        "observation_window": { "type": "string" },
+        "production_environment": { "type": "string" }
+      }
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "reconciliation_gate", "restore_test"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "reconciliation_gate": { "type": "boolean" },
+        "restore_test": { "type": "boolean" }
+      }
+    },
+    "design": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["applicable", "browser_proof", "human_labels", "accessibility", "localization"],
+      "properties": {
+        "applicable": { "type": "boolean" },
+        "source_of_truth": { "type": "string" },
+        "browser_proof": { "type": "boolean" },
+        "human_labels": { "type": "boolean" },
+        "accessibility": { "type": "boolean" },
+        "localization": { "type": "boolean" }
+      }
+    },
+    "governance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approvers", "criticality", "data_sensitivity"],
+      "properties": {
+        "approvers": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        "criticality": { "enum": ["low", "medium", "high"] },
+        "data_sensitivity": { "enum": ["public", "internal", "confidential", "regulated"] },
+        "risk_acceptance": { "type": "string" },
+        "command_waivers": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

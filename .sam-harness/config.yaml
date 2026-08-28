@@ -1,0 +1,97 @@
+schema_version: "1"
+harness_version: 0.1.0
+profile: production
+repository: sam-harness
+stacks:
+    - kind: go
+      path: .
+      package_manager: go
+      commands:
+        build:
+            - go
+            - build
+            - ./...
+        test:
+            - go
+            - test
+            - ./...
+        typecheck:
+            - go
+            - vet
+            - ./...
+      ui: false
+      persistence: false
+gates:
+    - name: go:.:build
+      stage: local
+      workdir: .
+      command:
+        - go
+        - build
+        - ./...
+      required: true
+    - name: go:.:test
+      stage: local
+      workdir: .
+      command:
+        - go
+        - test
+        - ./...
+      required: true
+    - name: go:.:typecheck
+      stage: local
+      workdir: .
+      command:
+        - go
+        - vet
+        - ./...
+      required: true
+authority:
+    write_repository: true
+    network: false
+    commit: false
+    push: false
+    release: false
+    deploy: false
+evidence:
+    receipt_directory: .sam-harness/evidence
+    required_states:
+        - source
+        - local_checks
+        - commit
+        - remote
+        - review
+        - ci
+        - artifact
+        - deployment
+        - live_proof
+ci:
+    providers:
+        - github
+    managed: false
+    branch_protection_required: true
+release:
+    immutable_artifact: true
+    sbom: true
+    provenance: true
+    promotion_required: true
+    rollback_owner: Samuel Fajreldines
+    observation_window: until every release asset and clean installation has been verified
+    production_environment: GitHub Releases
+migration:
+    required: false
+    reconciliation_gate: false
+    restore_test: false
+design:
+    applicable: false
+    browser_proof: false
+    human_labels: false
+    accessibility: false
+    localization: false
+governance:
+    approvers:
+        - Samuel Fajreldines
+    criticality: medium
+    data_sensitivity: public
+metadata:
+    generated_by: sam-harness

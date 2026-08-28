@@ -1,0 +1,7 @@
+.delivery/
+dist/
+coverage.out
+
+# sam-harness:start
+.sam-harness/evidence/
+# sam-harness:end
