@@ -4,7 +4,11 @@
 
 Sam Harness turns a repository's actual architecture, commands, delivery path, and risk into durable instructions for AI coding agents. It does not paste a large prompt into every conversation. A portable skill guides the adoption, a Go CLI produces deterministic plans and checks, and the installed repository files keep the rules in force after the chat ends.
 
-The method comes from Samuel Fajreldines's book [Development Harness](https://samuelfaj.com/books/development-harness-couse/).
+The method comes from Samuel Fajreldines's book [Development Harness](https://www.samuelfaj.com/books/development-harness-couse/development-harness-course.en-US.html).
+
+[![Development Harness workflow: from repository rules to safe production](assets/sam-harness.png)](https://www.samuelfaj.com/books/development-harness-couse/development-harness-course.en-US.html)
+
+Read the book in your language: [🇺🇸 English](https://www.samuelfaj.com/books/development-harness-couse/development-harness-course.en-US.html) · [🇧🇷 Português](https://www.samuelfaj.com/books/development-harness-couse/development-harness-course.html) · [🇪🇸 Español](https://www.samuelfaj.com/books/development-harness-couse/development-harness-course.es.html)
 
 ## Install the skill
 
