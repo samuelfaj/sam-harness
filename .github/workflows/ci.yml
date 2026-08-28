@@ -2,6 +2,7 @@ name: ci
 
 on:
   pull_request:
+  merge_group:
   push:
     branches: [main]
 
@@ -27,6 +28,8 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
       - name: Build
         run: go build ./cmd/sam-harness
+      - name: Complete installed lifecycle
+        run: ./testdata/e2e-full-flow.sh
       - name: Skill structure
         run: python3 scripts/validate-skill.py skills/sam-harness
       - name: Bootstrap shell syntax

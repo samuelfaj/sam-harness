@@ -1,5 +1,5 @@
 schema_version: "1"
-harness_version: 0.1.0
+harness_version: 0.2.0
 profile: production
 repository: sam-harness
 stacks:
@@ -24,6 +24,7 @@ stacks:
 gates:
     - name: go:.:build
       stage: local
+      phase: static
       workdir: .
       command:
         - go
@@ -32,6 +33,7 @@ gates:
       required: true
     - name: go:.:test
       stage: local
+      phase: test
       workdir: .
       command:
         - go
@@ -40,6 +42,7 @@ gates:
       required: true
     - name: go:.:typecheck
       stage: local
+      phase: static
       workdir: .
       command:
         - go
@@ -48,7 +51,7 @@ gates:
       required: true
 authority:
     write_repository: true
-    network: false
+    network: true
     commit: false
     push: false
     release: false
@@ -68,15 +71,31 @@ evidence:
 ci:
     providers:
         - github
-    managed: false
+    managed: true
     branch_protection_required: true
+    secret_bindings:
+        github:
+            - scope: review
+              environment: OPENAI_API_KEY
+              secret: OPENAI_API_KEY
+            - scope: repair
+              environment: OPENAI_API_KEY
+              secret: OPENAI_API_KEY
+    agent_secret_environments:
+        github: sam-harness-agents
+    agent_control_planes:
+        github:
+            mode: github_app
+            required_check: sam-harness/trusted-review
+            app_id_secret: SAM_HARNESS_GITHUB_APP_ID
+            app_private_key_secret: SAM_HARNESS_GITHUB_APP_PRIVATE_KEY
 release:
     immutable_artifact: true
     sbom: true
     provenance: true
     promotion_required: true
     rollback_owner: Samuel Fajreldines
-    observation_window: until every release asset and clean installation has been verified
+    observation_window: until the release assets, checksums, signature bundle, provenance and clean installation are verified
     production_environment: GitHub Releases
 migration:
     required: false
@@ -91,7 +110,353 @@ design:
 governance:
     approvers:
         - Samuel Fajreldines
-    criticality: medium
+    criticality: high
     data_sensitivity: public
+workflow:
+    enabled: true
+    static_guards:
+        commands:
+            dependencies:
+                name: verify module dependencies
+                workdir: .
+                command:
+                    - go
+                    - mod
+                    - verify
+                required: true
+                timeout_seconds: 120
+            format:
+                name: gofmt is clean
+                workdir: .
+                command:
+                    - sh
+                    - -c
+                    - test -z "$(gofmt -l .)"
+                required: true
+                timeout_seconds: 120
+            lint:
+                name: go vet
+                workdir: .
+                command:
+                    - go
+                    - vet
+                    - ./...
+                required: true
+                timeout_seconds: 600
+            project_policies:
+                name: portable skill validation
+                workdir: .
+                command:
+                    - python3
+                    - scripts/validate-skill.py
+                    - skills/sam-harness
+                required: true
+                timeout_seconds: 120
+            schema:
+                name: configuration schema and traceability
+                workdir: .
+                command:
+                    - go
+                    - test
+                    - ./internal/config
+                    - ./internal/traceability
+                required: true
+                timeout_seconds: 600
+            security:
+                name: reachable vulnerability scan
+                workdir: .
+                command:
+                    - go
+                    - run
+                    - golang.org/x/vuln/cmd/govulncheck@v1.7.0
+                    - ./...
+                required: true
+                timeout_seconds: 900
+            typecheck:
+                name: compile all Go packages
+                workdir: .
+                command:
+                    - go
+                    - test
+                    - -run
+                    - ^$
+                    - ./...
+                required: true
+                timeout_seconds: 600
+        waivers:
+            architecture: No separate deterministic architecture checker exists yet; dependency boundaries remain covered by package tests and the independent architecture reviewer.
+    test_guards:
+        commands:
+            business_invariants:
+                name: authority, evidence and book traceability invariants
+                workdir: .
+                command:
+                    - go
+                    - test
+                    - ./internal/pipeline
+                    - ./internal/apply
+                    - ./internal/traceability
+                required: true
+                timeout_seconds: 900
+            contract:
+                name: CLI and planning contracts
+                workdir: .
+                command:
+                    - go
+                    - test
+                    - ./internal/cli
+                    - ./internal/planner
+                    - ./internal/config
+                required: true
+                timeout_seconds: 900
+            e2e:
+                name: complete customer installation lifecycle
+                workdir: .
+                command:
+                    - sh
+                    - testdata/e2e-full-flow.sh
+                required: true
+                timeout_seconds: 1200
+            integration:
+                name: apply, configuration and renderer integration
+                workdir: .
+                command:
+                    - go
+                    - test
+                    - ./internal/apply
+                    - ./internal/config
+                    - ./internal/render
+                required: true
+                timeout_seconds: 900
+            unit:
+                name: complete Go test suite
+                workdir: .
+                command:
+                    - go
+                    - test
+                    - ./...
+                required: true
+                timeout_seconds: 900
+        waivers:
+            mutation: No Go mutation-testing tool is currently part of the supported toolchain; security and failure-path tests are explicit release gates.
+            performance: The CLI has no published latency or throughput SLO yet; a performance gate will be added when a measurable budget is adopted.
+            property: No stable generative-property harness is configured; boundary behavior is covered by table-driven unit tests.
+    reviewers:
+        - role: architecture
+          command:
+            - npx
+            - --yes
+            - '@openai/codex@0.150.1'
+            - exec
+            - --sandbox
+            - read-only
+            - --ephemeral
+            - --output-schema
+            - reviewer-output.schema.json
+            - '-'
+          timeout_seconds: 900
+          filesystem_read_only: true
+          trusted_external_command: true
+          trusted_config_arguments:
+            - 8
+        - role: security
+          command:
+            - npx
+            - --yes
+            - '@openai/codex@0.150.1'
+            - exec
+            - --sandbox
+            - read-only
+            - --ephemeral
+            - --output-schema
+            - reviewer-output.schema.json
+            - '-'
+          timeout_seconds: 900
+          filesystem_read_only: true
+          trusted_external_command: true
+          trusted_config_arguments:
+            - 8
+        - role: correctness
+          command:
+            - npx
+            - --yes
+            - '@openai/codex@0.150.1'
+            - exec
+            - --sandbox
+            - read-only
+            - --ephemeral
+            - --output-schema
+            - reviewer-output.schema.json
+            - '-'
+          timeout_seconds: 900
+          filesystem_read_only: true
+          trusted_external_command: true
+          trusted_config_arguments:
+            - 8
+        - role: test_quality
+          command:
+            - npx
+            - --yes
+            - '@openai/codex@0.150.1'
+            - exec
+            - --sandbox
+            - read-only
+            - --ephemeral
+            - --output-schema
+            - reviewer-output.schema.json
+            - '-'
+          timeout_seconds: 900
+          filesystem_read_only: true
+          trusted_external_command: true
+          trusted_config_arguments:
+            - 8
+        - role: business_rules
+          command:
+            - npx
+            - --yes
+            - '@openai/codex@0.150.1'
+            - exec
+            - --sandbox
+            - read-only
+            - --ephemeral
+            - --output-schema
+            - reviewer-output.schema.json
+            - '-'
+          timeout_seconds: 900
+          filesystem_read_only: true
+          trusted_external_command: true
+          trusted_config_arguments:
+            - 8
+        - role: simplicity
+          command:
+            - npx
+            - --yes
+            - '@openai/codex@0.150.1'
+            - exec
+            - --sandbox
+            - read-only
+            - --ephemeral
+            - --output-schema
+            - reviewer-output.schema.json
+            - '-'
+          timeout_seconds: 900
+          filesystem_read_only: true
+          trusted_external_command: true
+          trusted_config_arguments:
+            - 8
+    correction:
+        enabled: true
+        filesystem_sandboxed: true
+        command:
+            - npx
+            - --yes
+            - '@openai/codex@0.150.1'
+            - exec
+            - --sandbox
+            - workspace-write
+            - --ephemeral
+            - '-'
+        trusted_external_command: true
+        max_attempts: 2
+        max_changed_files: 20
+        max_changed_lines: 1000
+        branch_prefix: sam-harness/repair/
+        open_change_request: false
+    artifact:
+        build:
+            name: build the immutable CLI binary
+            workdir: .
+            command:
+                - go
+                - build
+                - -trimpath
+                - -o
+                - dist/sam-harness
+                - ./cmd/sam-harness
+            required: true
+            timeout_seconds: 900
+        artifact_path: dist/sam-harness
+        sbom:
+            name: record the binary module inventory
+            workdir: .
+            command:
+                - sh
+                - -c
+                - go version -m dist/sam-harness > dist/sam-harness.sbom.txt
+            required: true
+            timeout_seconds: 120
+        sbom_path: dist/sam-harness.sbom.txt
+        provenance:
+            name: record source and toolchain provenance
+            workdir: .
+            command:
+                - sh
+                - -c
+                - '{ git rev-parse HEAD; go version; } > dist/sam-harness.provenance.txt'
+            required: true
+            timeout_seconds: 120
+        provenance_path: dist/sam-harness.provenance.txt
+    deployment:
+        staging:
+            name: verify the release candidate in staging
+            workdir: .
+            command:
+                - sh
+                - -c
+                - test -x "$SAM_HARNESS_ARTIFACT_PATH" && test "$(shasum -a 256 "$SAM_HARNESS_ARTIFACT_PATH" | awk '{print $1}')" = "$SAM_HARNESS_ARTIFACT_SHA256" && "$SAM_HARNESS_ARTIFACT_PATH" doctor .
+            required: true
+            timeout_seconds: 300
+        production:
+            name: promote the approved binary to the GitHub release
+            workdir: .
+            command:
+                - sh
+                - -c
+                - test -n "${SAM_HARNESS_RELEASE_TAG:-}" && gh release upload "$SAM_HARNESS_RELEASE_TAG" "$SAM_HARNESS_ARTIFACT_PATH" --clobber
+            required: true
+            timeout_seconds: 600
+        rollback:
+            name: withdraw a failed GitHub release
+            workdir: .
+            command:
+                - sh
+                - -c
+                - test -n "${SAM_HARNESS_RELEASE_TAG:-}" && gh release edit "$SAM_HARNESS_RELEASE_TAG" --draft
+            required: true
+            timeout_seconds: 300
+        health_checks:
+            - name: verify the promoted release remains public
+              workdir: .
+              command:
+                - sh
+                - -c
+                - test -n "${SAM_HARNESS_RELEASE_TAG:-}" && gh release view "$SAM_HARNESS_RELEASE_TAG" --json isDraft --jq 'select(.isDraft == false) | .isDraft'
+              required: true
+              timeout_seconds: 120
+        observation_checks:
+            - name: verify release assets remain available
+              workdir: .
+              command:
+                - sh
+                - -c
+                - test -n "${SAM_HARNESS_RELEASE_TAG:-}" && test "$(gh release view "$SAM_HARNESS_RELEASE_TAG" --json assets --jq '.assets | length')" -gt 0
+              required: true
+              timeout_seconds: 120
+        canary_percentages:
+            - 100
+    migration:
+        - name: prove backward-compatible configuration migration
+          workdir: .
+          command:
+            - go
+            - test
+            - ./internal/config
+            - -run
+            - Backward|Workflow
+          required: true
+          timeout_seconds: 600
+    release_schedule:
+        cron: 0 15 * * 3
+        timezone: UTC
 metadata:
     generated_by: sam-harness

@@ -3,6 +3,7 @@ package check
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +73,100 @@ func TestRunResolvesRelativeExecutableAgainstGateWorkdir(t *testing.T) {
 	}
 }
 
+func TestRunIncludesExecutedAndWaivedWorkflowGuards(t *testing.T) {
+	root := t.TempDir()
+	script := filepath.Join(root, "guard.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig()
+	cfg.Gates = nil
+	cfg.Workflow = validWorkflow()
+	cfg.Workflow.StaticGuards.Commands[model.GuardFormat] = model.CommandSpec{
+		Name: "format", Workdir: ".", Command: []string{"./guard.sh"}, Required: true, TimeoutSeconds: 5,
+	}
+	delete(cfg.Workflow.StaticGuards.Waivers, model.GuardFormat)
+	writeConfig(t, root, cfg)
+
+	report, _, err := Run(root, false)
+	if err != nil {
+		t.Fatalf("Run() failed: %v\n%#v", err, report)
+	}
+	if !report.Passed || len(report.Results) != len(model.StaticGuardCategories)+len(model.TestGuardCategories) {
+		t.Fatalf("guard report = %#v", report)
+	}
+	if !report.Results[0].Passed || report.Results[0].Skipped {
+		t.Fatalf("executed guard was not recorded as a pass: %#v", report.Results[0])
+	}
+	if !report.Results[1].Skipped || report.Results[1].Passed || report.Results[1].Output == "" {
+		t.Fatalf("waiver was disguised as execution: %#v", report.Results[1])
+	}
+}
+
+func TestRunReportsPhaseBoundaryWhenPassingGateMutatesRepository(t *testing.T) {
+	root := t.TempDir()
+	script := filepath.Join(root, "mutate.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'generated\\n' > generated.txt\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig()
+	cfg.Gates = []model.Gate{{
+		Name: "passing command with forbidden side effect", Stage: "local", Workdir: ".",
+		Command: []string{"./mutate.sh"}, Required: true,
+	}}
+	writeConfig(t, root, cfg)
+
+	report, _, err := Run(root, false)
+	if err == nil {
+		t.Fatal("Run() succeeded after a passing gate mutated the repository")
+	}
+	if report.Passed {
+		t.Fatal("report.Passed = true after a phase boundary failure")
+	}
+	if len(report.Results) != 2 || !report.Results[0].Passed || report.Results[1].Passed {
+		t.Fatalf("results = %#v, want a passing command followed by a failing phase boundary", report.Results)
+	}
+	boundary := report.Results[1]
+	if boundary.Name != "static phase boundary" || !boundary.Required || boundary.ExitCode != -1 {
+		t.Fatalf("boundary result = %#v", boundary)
+	}
+	if !strings.Contains(boundary.Output, "mutated the repository") {
+		t.Fatalf("boundary output = %q, want the specific mutation error", boundary.Output)
+	}
+	if boundary.StartedAt.IsZero() || boundary.FinishedAt.Before(boundary.StartedAt) {
+		t.Fatalf("boundary timing was not recorded: %#v", boundary)
+	}
+}
+
+func TestRunPreservesMutationBoundaryWhenMutatingGateAlsoFails(t *testing.T) {
+	root := t.TempDir()
+	script := filepath.Join(root, "fail-and-mutate.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'generated\\n' > generated.txt\nexit 7\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig()
+	cfg.Gates = []model.Gate{{
+		Name: "failing command with forbidden side effect", Stage: "local", Workdir: ".",
+		Command: []string{"./fail-and-mutate.sh"}, Required: true,
+	}}
+	writeConfig(t, root, cfg)
+
+	report, _, err := Run(root, false)
+	if err == nil {
+		t.Fatal("Run() succeeded after a failing gate mutated the repository")
+	}
+	if len(report.Results) != 2 {
+		t.Fatalf("results = %#v, want both command failure and phase-boundary evidence", report.Results)
+	}
+	command, boundary := report.Results[0], report.Results[1]
+	if command.Passed || command.ExitCode != 7 {
+		t.Fatalf("command result = %#v, want exit code 7", command)
+	}
+	if boundary.Passed || boundary.Name != "static phase boundary" || !strings.Contains(boundary.Output, "mutated the repository") {
+		t.Fatalf("boundary result = %#v, want the specific mutation error", boundary)
+	}
+}
+
 func testConfig() model.Config {
 	return model.Config{
 		SchemaVersion:  model.SchemaVersion,
@@ -109,5 +204,38 @@ func writeConfig(t *testing.T, root string, cfg model.Config) {
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func validWorkflow() *model.WorkflowConfig {
+	command := func(name string) model.CommandSpec {
+		return model.CommandSpec{Name: name, Workdir: ".", Command: []string{"go", "version"}, Required: true, TimeoutSeconds: 5}
+	}
+	waivers := func(categories []string) model.GuardSet {
+		values := make(map[string]string, len(categories))
+		for _, category := range categories {
+			values[category] = "not applicable to the check fixture"
+		}
+		return model.GuardSet{Commands: map[string]model.CommandSpec{}, Waivers: values}
+	}
+	reviewers := make([]model.ReviewerConfig, 0, len(model.ReviewerRoles))
+	for _, role := range model.ReviewerRoles {
+		reviewers = append(reviewers, model.ReviewerConfig{Role: role, Command: []string{"go", "version"}, TimeoutSeconds: 5, FilesystemReadOnly: true})
+	}
+	return &model.WorkflowConfig{
+		Enabled:      true,
+		StaticGuards: waivers(model.StaticGuardCategories),
+		TestGuards:   waivers(model.TestGuardCategories),
+		Reviewers:    reviewers,
+		Artifact: model.ArtifactWorkflow{
+			Build: command("build"), ArtifactPath: "out/app.bin",
+			SBOM: command("sbom"), SBOMPath: "out/sbom.json",
+			Provenance: command("provenance"), ProvenancePath: "out/provenance.json",
+		},
+		Deployment: model.DeploymentWorkflow{
+			Staging: command("staging"), Production: command("production"), Rollback: command("rollback"),
+			HealthChecks: []model.CommandSpec{command("health")}, ObservationChecks: []model.CommandSpec{command("observe")}, CanaryPercentages: []int{100},
+		},
+		Migration: []model.CommandSpec{command("migration")}, ReleaseSchedule: model.ReleaseSchedule{Cron: "0 9 * * 1", Timezone: "UTC"},
 	}
 }

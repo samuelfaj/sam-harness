@@ -66,6 +66,38 @@
             "gitlab": { "type": "string", "minLength": 1 }
           }
         },
+        "secret_bindings": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "github": { "type": "array", "items": { "$ref": "#/$defs/ci_secret_binding" }, "minItems": 1 },
+            "gitlab": { "type": "array", "items": { "$ref": "#/$defs/ci_secret_binding" }, "minItems": 1 }
+          }
+        },
+        "secret_waivers": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "github": { "type": "string", "minLength": 1 },
+            "gitlab": { "type": "string", "minLength": 1 }
+          }
+        },
+        "agent_secret_environments": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "github": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+            "gitlab": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" }
+          }
+        },
+        "agent_control_planes": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "github": { "$ref": "#/$defs/github_agent_control_plane" },
+            "gitlab": { "$ref": "#/$defs/gitlab_agent_control_plane" }
+          }
+        },
         "gitlab_image": { "type": "string", "minLength": 1 }
       }
     },
@@ -73,6 +105,7 @@
     "migration": { "$ref": "#/$defs/migration" },
     "design": { "$ref": "#/$defs/design" },
     "governance": { "$ref": "#/$defs/governance" },
+    "workflow": { "$ref": "#/$defs/workflow" },
     "metadata": { "type": "object", "additionalProperties": { "type": "string" } }
   },
   "$defs": {
@@ -103,6 +136,7 @@
       "properties": {
         "name": { "type": "string", "minLength": 1 },
         "stage": { "enum": ["local", "ci", "release", "production"] },
+        "phase": { "enum": ["static", "test", "review", "artifact", "staging", "production", "observe", "rollback", "migration", "all"] },
         "workdir": { "type": "string", "minLength": 1 },
         "command": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
         "required": { "type": "boolean" }
@@ -115,6 +149,180 @@
       "properties": {
         "workdir": { "type": "string", "minLength": 1 },
         "command": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+      }
+    },
+    "ci_secret_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "environment", "secret"],
+      "properties": {
+        "scope": { "enum": ["static", "test", "review", "repair", "artifact", "staging", "production", "observe", "rollback", "migration"] },
+        "environment": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "secret": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+      }
+    },
+    "github_agent_control_plane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "required_check", "app_id_secret", "app_private_key_secret"],
+      "properties": {
+        "mode": { "const": "github_app" },
+        "required_check": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$" },
+        "app_id_secret": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "app_private_key_secret": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+      }
+    },
+    "gitlab_agent_control_plane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "required_check", "external_project"],
+      "properties": {
+        "mode": { "const": "external" },
+        "required_check": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$" },
+        "external_project": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$" }
+      }
+    },
+    "command_spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "workdir", "command", "required", "timeout_seconds"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "workdir": { "type": "string", "minLength": 1 },
+        "command": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        "required": { "type": "boolean" },
+        "timeout_seconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "guard_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commands", "waivers"],
+      "properties": {
+        "commands": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/guard_category" },
+          "additionalProperties": { "$ref": "#/$defs/command_spec" }
+        },
+        "waivers": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/guard_category" },
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "guard_category": {
+      "enum": [
+        "format",
+        "lint",
+        "typecheck",
+        "architecture",
+        "security",
+        "dependencies",
+        "schema",
+        "project_policies",
+        "unit",
+        "integration",
+        "contract",
+        "business_invariants",
+        "property",
+        "mutation",
+        "e2e",
+        "performance"
+      ]
+    },
+    "reviewer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "command", "timeout_seconds", "filesystem_read_only"],
+      "properties": {
+        "role": { "enum": ["architecture", "security", "correctness", "test_quality", "business_rules", "simplicity"] },
+        "command": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        "timeout_seconds": { "type": "integer", "minimum": 1 },
+        "filesystem_read_only": { "type": "boolean" },
+        "trusted_external_command": { "type": "boolean" },
+        "trusted_config_arguments": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1 },
+          "uniqueItems": true
+        }
+      }
+    },
+    "correction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "filesystem_sandboxed", "max_attempts", "max_changed_files", "max_changed_lines", "open_change_request"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "filesystem_sandboxed": { "type": "boolean" },
+        "command": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        "trusted_external_command": { "type": "boolean" },
+        "trusted_config_arguments": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1 },
+          "uniqueItems": true
+        },
+        "max_attempts": { "type": "integer", "minimum": 0 },
+        "max_changed_files": { "type": "integer", "minimum": 0 },
+        "max_changed_lines": { "type": "integer", "minimum": 0 },
+        "branch_prefix": { "type": "string", "minLength": 1 },
+        "open_change_request": { "type": "boolean" }
+      }
+    },
+    "artifact_workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["build", "artifact_path", "sbom", "sbom_path", "provenance", "provenance_path"],
+      "properties": {
+        "build": { "$ref": "#/$defs/command_spec" },
+        "artifact_path": { "type": "string", "minLength": 1 },
+        "sbom": { "$ref": "#/$defs/command_spec" },
+        "sbom_path": { "type": "string", "minLength": 1 },
+        "provenance": { "$ref": "#/$defs/command_spec" },
+        "provenance_path": { "type": "string", "minLength": 1 }
+      }
+    },
+    "deployment_workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["staging", "production", "rollback", "health_checks", "observation_checks", "canary_percentages"],
+      "properties": {
+        "staging": { "$ref": "#/$defs/command_spec" },
+        "production": { "$ref": "#/$defs/command_spec" },
+        "rollback": { "$ref": "#/$defs/command_spec" },
+        "health_checks": { "type": "array", "items": { "$ref": "#/$defs/command_spec" }, "minItems": 1 },
+        "observation_checks": { "type": "array", "items": { "$ref": "#/$defs/command_spec" }, "minItems": 1 },
+        "canary_percentages": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1, "maximum": 100 },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    },
+    "release_schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cron", "timezone"],
+      "properties": {
+        "cron": { "type": "string", "minLength": 1 },
+        "timezone": { "type": "string", "minLength": 1 }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "static_guards", "test_guards", "reviewers", "correction", "artifact", "deployment", "migration", "release_schedule"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "static_guards": { "$ref": "#/$defs/guard_set" },
+        "test_guards": { "$ref": "#/$defs/guard_set" },
+        "reviewers": { "type": "array", "items": { "$ref": "#/$defs/reviewer" }, "minItems": 6, "maxItems": 6 },
+        "correction": { "$ref": "#/$defs/correction" },
+        "artifact": { "$ref": "#/$defs/artifact_workflow" },
+        "deployment": { "$ref": "#/$defs/deployment_workflow" },
+        "migration": { "type": "array", "items": { "$ref": "#/$defs/command_spec" }, "minItems": 1 },
+        "release_schedule": { "$ref": "#/$defs/release_schedule" }
       }
     },
     "authority": {

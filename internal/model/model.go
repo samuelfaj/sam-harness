@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-var HarnessVersion = "0.1.0"
+var HarnessVersion = "0.2.0"
 
 const SchemaVersion = "1"
 
@@ -24,6 +24,131 @@ func (p Profile) Valid(allowAuto bool) bool {
 		return true
 	case ProfileAuto:
 		return allowAuto
+	default:
+		return false
+	}
+}
+
+type Phase string
+
+const (
+	PhaseStatic     Phase = "static"
+	PhaseTest       Phase = "test"
+	PhaseReview     Phase = "review"
+	PhaseArtifact   Phase = "artifact"
+	PhaseStaging    Phase = "staging"
+	PhaseProduction Phase = "production"
+	PhaseObserve    Phase = "observe"
+	PhaseRollback   Phase = "rollback"
+	PhaseMigration  Phase = "migration"
+	PhaseAll        Phase = "all"
+)
+
+func (p Phase) Valid() bool {
+	switch p {
+	case PhaseStatic, PhaseTest, PhaseReview, PhaseArtifact, PhaseStaging, PhaseProduction, PhaseObserve, PhaseRollback, PhaseMigration, PhaseAll:
+		return true
+	default:
+		return false
+	}
+}
+
+const (
+	CISecretScopeStatic     = "static"
+	CISecretScopeTest       = "test"
+	CISecretScopeReview     = "review"
+	CISecretScopeRepair     = "repair"
+	CISecretScopeArtifact   = "artifact"
+	CISecretScopeStaging    = "staging"
+	CISecretScopeProduction = "production"
+	CISecretScopeObserve    = "observe"
+	CISecretScopeRollback   = "rollback"
+	CISecretScopeMigration  = "migration"
+)
+
+const (
+	AgentControlPlaneModeGitHubApp = "github_app"
+	AgentControlPlaneModeExternal  = "external"
+)
+
+var CISecretScopes = []string{
+	CISecretScopeStatic,
+	CISecretScopeTest,
+	CISecretScopeReview,
+	CISecretScopeRepair,
+	CISecretScopeArtifact,
+	CISecretScopeStaging,
+	CISecretScopeProduction,
+	CISecretScopeObserve,
+	CISecretScopeRollback,
+	CISecretScopeMigration,
+}
+
+const (
+	GuardFormat             = "format"
+	GuardLint               = "lint"
+	GuardTypecheck          = "typecheck"
+	GuardArchitecture       = "architecture"
+	GuardSecurity           = "security"
+	GuardDependencies       = "dependencies"
+	GuardSchema             = "schema"
+	GuardProjectPolicies    = "project_policies"
+	GuardUnit               = "unit"
+	GuardIntegration        = "integration"
+	GuardContract           = "contract"
+	GuardBusinessInvariants = "business_invariants"
+	GuardProperty           = "property"
+	GuardMutation           = "mutation"
+	GuardE2E                = "e2e"
+	GuardPerformance        = "performance"
+)
+
+var StaticGuardCategories = []string{
+	GuardFormat,
+	GuardLint,
+	GuardTypecheck,
+	GuardArchitecture,
+	GuardSecurity,
+	GuardDependencies,
+	GuardSchema,
+	GuardProjectPolicies,
+}
+
+var TestGuardCategories = []string{
+	GuardUnit,
+	GuardIntegration,
+	GuardContract,
+	GuardBusinessInvariants,
+	GuardProperty,
+	GuardMutation,
+	GuardE2E,
+	GuardPerformance,
+}
+
+type ReviewerRole string
+
+const (
+	ReviewerArchitecture  ReviewerRole = "architecture"
+	ReviewerSecurity      ReviewerRole = "security"
+	ReviewerCorrectness   ReviewerRole = "correctness"
+	ReviewerTestQuality   ReviewerRole = "test_quality"
+	ReviewerBusinessRules ReviewerRole = "business_rules"
+	ReviewerSimplicity    ReviewerRole = "simplicity"
+)
+
+var ReviewerRoles = []ReviewerRole{
+	ReviewerArchitecture,
+	ReviewerSecurity,
+	ReviewerCorrectness,
+	ReviewerTestQuality,
+	ReviewerBusinessRules,
+	ReviewerSimplicity,
+}
+
+func (r ReviewerRole) Valid() bool {
+	switch r {
+	case ReviewerArchitecture, ReviewerSecurity, ReviewerCorrectness, ReviewerTestQuality, ReviewerBusinessRules, ReviewerSimplicity:
+		return true
 	default:
 		return false
 	}
@@ -59,25 +184,30 @@ type ScanResult struct {
 }
 
 type Answers struct {
-	Criticality           string                         `json:"criticality"`
-	DataSensitivity       string                         `json:"data_sensitivity"`
-	DeploysToProduction   *bool                          `json:"deploys_to_production"`
-	PersistentData        *bool                          `json:"persistent_data"`
-	IrreversibleActions   *bool                          `json:"irreversible_actions"`
-	DesignSourceOfTruth   string                         `json:"design_source_of_truth,omitempty"`
-	Approvers             []string                       `json:"approvers"`
-	AllowCIChanges        *bool                          `json:"allow_ci_changes"`
-	CIProviders           []string                       `json:"ci_providers,omitempty"`
-	AllowedActions        *[]string                      `json:"allowed_actions"`
-	CommandOverrides      map[string]map[string][]string `json:"command_overrides,omitempty"`
-	CommandWaivers        map[string]string              `json:"command_waivers,omitempty"`
-	CISetupCommands       map[string][]SetupCommand      `json:"ci_setup_commands,omitempty"`
-	CISetupWaivers        map[string]string              `json:"ci_setup_waivers,omitempty"`
-	GitLabImage           string                         `json:"gitlab_image,omitempty"`
-	RiskAcceptance        string                         `json:"risk_acceptance,omitempty"`
-	ObservationWindow     string                         `json:"observation_window,omitempty"`
-	RollbackOwner         string                         `json:"rollback_owner,omitempty"`
-	ProductionEnvironment string                         `json:"production_environment,omitempty"`
+	Criticality             string                         `json:"criticality"`
+	DataSensitivity         string                         `json:"data_sensitivity"`
+	DeploysToProduction     *bool                          `json:"deploys_to_production"`
+	PersistentData          *bool                          `json:"persistent_data"`
+	IrreversibleActions     *bool                          `json:"irreversible_actions"`
+	DesignSourceOfTruth     string                         `json:"design_source_of_truth,omitempty"`
+	Approvers               []string                       `json:"approvers"`
+	AllowCIChanges          *bool                          `json:"allow_ci_changes"`
+	CIProviders             []string                       `json:"ci_providers,omitempty"`
+	AllowedActions          *[]string                      `json:"allowed_actions"`
+	CommandOverrides        map[string]map[string][]string `json:"command_overrides,omitempty"`
+	CommandWaivers          map[string]string              `json:"command_waivers,omitempty"`
+	CISetupCommands         map[string][]SetupCommand      `json:"ci_setup_commands,omitempty"`
+	CISetupWaivers          map[string]string              `json:"ci_setup_waivers,omitempty"`
+	CISecretBindings        map[string][]CISecretBinding   `json:"ci_secret_bindings,omitempty"`
+	CISecretWaivers         map[string]string              `json:"ci_secret_waivers,omitempty"`
+	AgentSecretEnvironments map[string]string              `json:"agent_secret_environments,omitempty"`
+	AgentControlPlanes      map[string]AgentControlPlane   `json:"agent_control_planes,omitempty"`
+	GitLabImage             string                         `json:"gitlab_image,omitempty"`
+	RiskAcceptance          string                         `json:"risk_acceptance,omitempty"`
+	ObservationWindow       string                         `json:"observation_window,omitempty"`
+	RollbackOwner           string                         `json:"rollback_owner,omitempty"`
+	ProductionEnvironment   string                         `json:"production_environment,omitempty"`
+	Workflow                *WorkflowConfig                `json:"workflow,omitempty"`
 }
 
 func (a Answers) Missing(scan ScanResult) []string {
@@ -122,9 +252,80 @@ func (a Answers) CommandWaiver(key string) bool {
 type Gate struct {
 	Name     string   `json:"name" yaml:"name"`
 	Stage    string   `json:"stage" yaml:"stage"`
+	Phase    Phase    `json:"phase,omitempty" yaml:"phase,omitempty"`
 	Workdir  string   `json:"workdir" yaml:"workdir"`
 	Command  []string `json:"command" yaml:"command"`
 	Required bool     `json:"required" yaml:"required"`
+}
+
+type CommandSpec struct {
+	Name           string   `json:"name" yaml:"name"`
+	Workdir        string   `json:"workdir" yaml:"workdir"`
+	Command        []string `json:"command" yaml:"command"`
+	Required       bool     `json:"required" yaml:"required"`
+	TimeoutSeconds int      `json:"timeout_seconds" yaml:"timeout_seconds"`
+}
+
+type GuardSet struct {
+	Commands map[string]CommandSpec `json:"commands" yaml:"commands"`
+	Waivers  map[string]string      `json:"waivers" yaml:"waivers"`
+}
+
+type ReviewerConfig struct {
+	Role                   ReviewerRole `json:"role" yaml:"role"`
+	Command                []string     `json:"command" yaml:"command"`
+	TimeoutSeconds         int          `json:"timeout_seconds" yaml:"timeout_seconds"`
+	FilesystemReadOnly     bool         `json:"filesystem_read_only" yaml:"filesystem_read_only"`
+	TrustedExternalCommand bool         `json:"trusted_external_command,omitempty" yaml:"trusted_external_command,omitempty"`
+	TrustedConfigArguments []int        `json:"trusted_config_arguments,omitempty" yaml:"trusted_config_arguments,omitempty"`
+}
+
+type CorrectionConfig struct {
+	Enabled                bool     `json:"enabled" yaml:"enabled"`
+	FilesystemSandboxed    bool     `json:"filesystem_sandboxed" yaml:"filesystem_sandboxed"`
+	Command                []string `json:"command,omitempty" yaml:"command,omitempty"`
+	TrustedExternalCommand bool     `json:"trusted_external_command,omitempty" yaml:"trusted_external_command,omitempty"`
+	TrustedConfigArguments []int    `json:"trusted_config_arguments,omitempty" yaml:"trusted_config_arguments,omitempty"`
+	MaxAttempts            int      `json:"max_attempts" yaml:"max_attempts"`
+	MaxChangedFiles        int      `json:"max_changed_files" yaml:"max_changed_files"`
+	MaxChangedLines        int      `json:"max_changed_lines" yaml:"max_changed_lines"`
+	BranchPrefix           string   `json:"branch_prefix,omitempty" yaml:"branch_prefix,omitempty"`
+	OpenChangeRequest      bool     `json:"open_change_request" yaml:"open_change_request"`
+}
+
+type ArtifactWorkflow struct {
+	Build          CommandSpec `json:"build" yaml:"build"`
+	ArtifactPath   string      `json:"artifact_path" yaml:"artifact_path"`
+	SBOM           CommandSpec `json:"sbom" yaml:"sbom"`
+	SBOMPath       string      `json:"sbom_path" yaml:"sbom_path"`
+	Provenance     CommandSpec `json:"provenance" yaml:"provenance"`
+	ProvenancePath string      `json:"provenance_path" yaml:"provenance_path"`
+}
+
+type DeploymentWorkflow struct {
+	Staging           CommandSpec   `json:"staging" yaml:"staging"`
+	Production        CommandSpec   `json:"production" yaml:"production"`
+	Rollback          CommandSpec   `json:"rollback" yaml:"rollback"`
+	HealthChecks      []CommandSpec `json:"health_checks" yaml:"health_checks"`
+	ObservationChecks []CommandSpec `json:"observation_checks" yaml:"observation_checks"`
+	CanaryPercentages []int         `json:"canary_percentages" yaml:"canary_percentages"`
+}
+
+type ReleaseSchedule struct {
+	Cron     string `json:"cron" yaml:"cron"`
+	Timezone string `json:"timezone" yaml:"timezone"`
+}
+
+type WorkflowConfig struct {
+	Enabled         bool               `json:"enabled" yaml:"enabled"`
+	StaticGuards    GuardSet           `json:"static_guards" yaml:"static_guards"`
+	TestGuards      GuardSet           `json:"test_guards" yaml:"test_guards"`
+	Reviewers       []ReviewerConfig   `json:"reviewers" yaml:"reviewers"`
+	Correction      CorrectionConfig   `json:"correction" yaml:"correction"`
+	Artifact        ArtifactWorkflow   `json:"artifact" yaml:"artifact"`
+	Deployment      DeploymentWorkflow `json:"deployment" yaml:"deployment"`
+	Migration       []CommandSpec      `json:"migration" yaml:"migration"`
+	ReleaseSchedule ReleaseSchedule    `json:"release_schedule" yaml:"release_schedule"`
 }
 
 type Authority struct {
@@ -146,13 +347,31 @@ type SetupCommand struct {
 	Command []string `json:"command" yaml:"command"`
 }
 
+type CISecretBinding struct {
+	Scope       string `json:"scope" yaml:"scope"`
+	Environment string `json:"environment" yaml:"environment"`
+	Secret      string `json:"secret" yaml:"secret"`
+}
+
+type AgentControlPlane struct {
+	Mode                string `json:"mode" yaml:"mode"`
+	RequiredCheck       string `json:"required_check" yaml:"required_check"`
+	AppIDSecret         string `json:"app_id_secret,omitempty" yaml:"app_id_secret,omitempty"`
+	AppPrivateKeySecret string `json:"app_private_key_secret,omitempty" yaml:"app_private_key_secret,omitempty"`
+	ExternalProject     string `json:"external_project,omitempty" yaml:"external_project,omitempty"`
+}
+
 type CIConfig struct {
-	Providers                []string                  `json:"providers" yaml:"providers"`
-	Managed                  bool                      `json:"managed" yaml:"managed"`
-	BranchProtectionRequired bool                      `json:"branch_protection_required" yaml:"branch_protection_required"`
-	SetupCommands            map[string][]SetupCommand `json:"setup_commands,omitempty" yaml:"setup_commands,omitempty"`
-	SetupWaivers             map[string]string         `json:"setup_waivers,omitempty" yaml:"setup_waivers,omitempty"`
-	GitLabImage              string                    `json:"gitlab_image,omitempty" yaml:"gitlab_image,omitempty"`
+	Providers                []string                     `json:"providers" yaml:"providers"`
+	Managed                  bool                         `json:"managed" yaml:"managed"`
+	BranchProtectionRequired bool                         `json:"branch_protection_required" yaml:"branch_protection_required"`
+	SetupCommands            map[string][]SetupCommand    `json:"setup_commands,omitempty" yaml:"setup_commands,omitempty"`
+	SetupWaivers             map[string]string            `json:"setup_waivers,omitempty" yaml:"setup_waivers,omitempty"`
+	SecretBindings           map[string][]CISecretBinding `json:"secret_bindings,omitempty" yaml:"secret_bindings,omitempty"`
+	SecretWaivers            map[string]string            `json:"secret_waivers,omitempty" yaml:"secret_waivers,omitempty"`
+	AgentSecretEnvironments  map[string]string            `json:"agent_secret_environments,omitempty" yaml:"agent_secret_environments,omitempty"`
+	AgentControlPlanes       map[string]AgentControlPlane `json:"agent_control_planes,omitempty" yaml:"agent_control_planes,omitempty"`
+	GitLabImage              string                       `json:"gitlab_image,omitempty" yaml:"gitlab_image,omitempty"`
 }
 
 type ReleaseConfig struct {
@@ -202,6 +421,7 @@ type Config struct {
 	Migration      MigrationConfig   `json:"migration" yaml:"migration"`
 	Design         DesignConfig      `json:"design" yaml:"design"`
 	Governance     GovernanceConfig  `json:"governance" yaml:"governance"`
+	Workflow       *WorkflowConfig   `json:"workflow,omitempty" yaml:"workflow,omitempty"`
 	Metadata       map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty"`
 }
 

@@ -5,7 +5,7 @@ The configured authority is intentionally explicit. A missing permission means s
 | Action | Granted |
 |---|---:|
 | Write repository files | true |
-| Use network | false |
+| Use network | true |
 | Create commits | false |
 | Push remote branches | false |
 | Publish releases | false |

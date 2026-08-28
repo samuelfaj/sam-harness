@@ -1,0 +1,1202 @@
+package pipeline
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/samuelfaj/sam-harness/internal/config"
+	"github.com/samuelfaj/sam-harness/internal/model"
+)
+
+func TestPhaseExecutionWritesCanonicalReceiptAndRejectsEscapingWorkdir(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SAM_HARNESS_PIPELINE_PHASE", "wrong-parent-value")
+	writeExecutable(t, root, "scripts/static.sh", `#!/bin/sh
+test "$SAM_HARNESS_PIPELINE_PHASE" = static
+printf 'static ran\n'
+`)
+	if err := os.MkdirAll(filepath.Join(root, "work"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testPipelineConfig()
+	cfg.Gates = []model.Gate{{
+		Name:     "static-fixture",
+		Stage:    "local",
+		Phase:    model.PhaseStatic,
+		Workdir:  "work",
+		Command:  []string{"../scripts/static.sh"},
+		Required: true,
+	}}
+	writePipelineConfig(t, root, cfg)
+
+	receipt, receiptPath, err := Run(root, model.PhaseStatic, true)
+	if err != nil {
+		t.Fatalf("Run() failed: %v\n%#v", err, receipt)
+	}
+	if !receipt.Passed || receipt.Status != StatusPassed || len(receipt.Commands) != 1+len(model.StaticGuardCategories) || receipt.Commands[0].Name != "static-fixture" {
+		t.Fatalf("receipt = %#v", receipt)
+	}
+	if receipt.Repository != "fixture" || receipt.Fingerprint == "" || receipt.FinalFingerprint == "" || receipt.StartedAt.IsZero() || receipt.FinishedAt.Before(receipt.StartedAt) {
+		t.Fatalf("receipt lacks canonical evidence: %#v", receipt)
+	}
+	data, err := os.ReadFile(receiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Receipt
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("receipt is not JSON: %v", err)
+	}
+	if decoded.Repository != "fixture" || decoded.Phase != model.PhaseStatic || !decoded.Passed {
+		t.Fatalf("written receipt = %#v", decoded)
+	}
+
+	execution := execute(root, model.PhaseStatic, model.CommandSpec{
+		Name:     "escape",
+		Workdir:  "../outside",
+		Command:  []string{"go", "version"},
+		Required: true,
+	}, nil, nil)
+	if execution.result.Passed || !strings.Contains(execution.result.Output, "escapes root") {
+		t.Fatalf("escaping command was not blocked: %#v", execution.result)
+	}
+}
+
+func TestPipelineTrustedConfigOverrideGovernsPRWorktree(t *testing.T) {
+	root := t.TempDir()
+	trustedMarker := filepath.Join(t.TempDir(), "trusted-ran")
+	exfilMarker := filepath.Join(t.TempDir(), "pr-config-ran")
+	writeExecutable(t, root, "trusted.sh", "#!/bin/sh\nprintf trusted > \"$1\"\n")
+	writeExecutable(t, root, "exfil.sh", "#!/bin/sh\nprintf exfiltrated > \"$1\"\n")
+
+	prConfig := testPipelineConfig()
+	prConfig.Gates = []model.Gate{{Name: "pr-controlled", Stage: "local", Phase: model.PhaseStatic, Workdir: ".", Command: []string{"./exfil.sh", exfilMarker}, Required: true}}
+	writePipelineConfig(t, root, prConfig)
+
+	trustedConfig := testPipelineConfig()
+	trustedConfig.Gates = []model.Gate{{Name: "trusted", Stage: "local", Phase: model.PhaseStatic, Workdir: ".", Command: []string{"./trusted.sh", trustedMarker}, Required: true}}
+	trustedPath := filepath.Join(t.TempDir(), "trusted-config.yaml")
+	writePipelineConfigAt(t, trustedPath, trustedConfig)
+
+	receipt, receiptPath, err := RunWithConfig(root, trustedPath, model.PhaseStatic, true)
+	if err != nil {
+		t.Fatalf("trusted config pipeline failed: %v\n%#v", err, receipt)
+	}
+	if got := readFile(t, trustedMarker); got != "trusted" {
+		t.Fatalf("trusted command did not govern the PR worktree: %q", got)
+	}
+	if _, err := os.Stat(exfilMarker); !os.IsNotExist(err) {
+		t.Fatalf("PR-controlled config command executed: %v", err)
+	}
+	wantSource, err := filepath.EvalSymlinks(trustedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(trustedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDigest := sha256.Sum256(raw)
+	if receipt.ConfigSource != wantSource || receipt.ConfigSHA256 != hex.EncodeToString(wantDigest[:]) {
+		t.Fatalf("receipt config provenance = %#v", receipt)
+	}
+	persisted, err := os.ReadFile(receiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Receipt
+	if err := json.Unmarshal(persisted, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.ConfigSource != receipt.ConfigSource || decoded.ConfigSHA256 != receipt.ConfigSHA256 {
+		t.Fatalf("persisted receipt lost config provenance: %#v", decoded)
+	}
+}
+
+func TestPipelineConfigOverrideRejectsUnsafeFiles(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "trusted.yaml")
+	writePipelineConfigAt(t, outside, testPipelineConfig())
+	link := filepath.Join(root, "trusted-link.yaml")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, "trusted-dir")
+	if err := os.Mkdir(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []struct {
+		name       string
+		path       string
+		errorMatch string
+	}{
+		{name: "missing", path: filepath.Join(root, "missing.yaml"), errorMatch: "does not exist"},
+		{name: "symlink", path: link, errorMatch: "symbolic link"},
+		{name: "non-regular", path: directory, errorMatch: "regular file"},
+		{name: "relative escape", path: "../trusted.yaml", errorMatch: "escapes repository"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			if _, _, err := RunWithConfig(root, scenario.path, model.PhaseStatic, false); err == nil || !strings.Contains(err.Error(), scenario.errorMatch) {
+				t.Fatalf("unsafe config path was accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestPipelineConfigOverrideAcceptsContainedRelativeFile(t *testing.T) {
+	root := t.TempDir()
+	relative := filepath.Join("trusted", "config.yaml")
+	writePipelineConfigAt(t, filepath.Join(root, relative), testPipelineConfig())
+	receipt, _, err := RunWithConfig(root, filepath.ToSlash(relative), model.PhaseStatic, false)
+	if err != nil || !receipt.Passed {
+		t.Fatalf("contained relative config failed: err=%v receipt=%#v", err, receipt)
+	}
+	if !filepath.IsAbs(receipt.ConfigSource) || receipt.ConfigSHA256 == "" {
+		t.Fatalf("relative config was not canonicalized in receipt: %#v", receipt)
+	}
+}
+
+func TestPipelineBlocksTrustedConfigReplacementDuringPhase(t *testing.T) {
+	root := t.TempDir()
+	trustedPath := filepath.Join(t.TempDir(), "trusted-config.yaml")
+	writeExecutable(t, root, "replace-config.sh", "#!/bin/sh\ncp \"$1\" \"$1.replacement\"\nmv \"$1.replacement\" \"$1\"\n")
+	cfg := testPipelineConfig()
+	cfg.Gates = []model.Gate{{Name: "replace-config", Stage: "local", Phase: model.PhaseStatic, Workdir: ".", Command: []string{"./replace-config.sh", trustedPath}, Required: true}}
+	writePipelineConfigAt(t, trustedPath, cfg)
+
+	receipt, _, err := RunWithConfig(root, trustedPath, model.PhaseStatic, false)
+	if err == nil || receipt.Status != StatusBlocked || !strings.Contains(err.Error(), "configuration source changed") {
+		t.Fatalf("trusted config mutation was accepted: err=%v receipt=%#v", err, receipt)
+	}
+}
+
+func TestGuardCommandsAndWaiversHaveDistinctDeterministicEvidence(t *testing.T) {
+	root := t.TempDir()
+	guardLog := filepath.Join(t.TempDir(), "guards.log")
+	writeExecutable(t, root, "guard.sh", `#!/bin/sh
+test "$SAM_HARNESS_PIPELINE_PHASE" = "$1"
+printf '%s:%s\n' "$1" "$2" >> "$3"
+`)
+	cfg := testPipelineConfig()
+	cfg.Gates = nil
+	cfg.Workflow.StaticGuards.Commands[model.GuardFormat] = model.CommandSpec{
+		Name:           "format-guard",
+		Workdir:        ".",
+		Command:        []string{"./guard.sh", "static", model.GuardFormat, guardLog},
+		Required:       true,
+		TimeoutSeconds: 5,
+	}
+	delete(cfg.Workflow.StaticGuards.Waivers, model.GuardFormat)
+	cfg.Workflow.TestGuards.Commands[model.GuardUnit] = model.CommandSpec{
+		Name:           "unit-guard",
+		Workdir:        ".",
+		Command:        []string{"./guard.sh", "test", model.GuardUnit, guardLog},
+		Required:       true,
+		TimeoutSeconds: 5,
+	}
+	delete(cfg.Workflow.TestGuards.Waivers, model.GuardUnit)
+	writePipelineConfig(t, root, cfg)
+
+	staticReceipt, _, err := Run(root, model.PhaseStatic, false)
+	if err != nil {
+		t.Fatalf("static guards failed: %v\n%#v", err, staticReceipt)
+	}
+	testReceipt, _, err := Run(root, model.PhaseTest, false)
+	if err != nil {
+		t.Fatalf("test guards failed: %v\n%#v", err, testReceipt)
+	}
+	for _, phaseReceipt := range []struct {
+		receipt    Receipt
+		categories []string
+		executed   string
+	}{
+		{staticReceipt, model.StaticGuardCategories, model.GuardFormat},
+		{testReceipt, model.TestGuardCategories, model.GuardUnit},
+	} {
+		if len(phaseReceipt.receipt.Commands) != len(phaseReceipt.categories) {
+			t.Fatalf("guard receipt has %d results: %#v", len(phaseReceipt.receipt.Commands), phaseReceipt.receipt)
+		}
+		for index, category := range phaseReceipt.categories {
+			result := phaseReceipt.receipt.Commands[index]
+			if result.Category != category {
+				t.Fatalf("guard category order = %#v", phaseReceipt.receipt.Commands)
+			}
+			if category == phaseReceipt.executed {
+				if !result.Passed || result.Skipped || result.Waiver != "" {
+					t.Fatalf("executed guard disguised in receipt: %#v", result)
+				}
+			} else if result.Passed || !result.Skipped || result.Waiver == "" || result.Output != result.Waiver {
+				t.Fatalf("waived guard disguised as execution: %#v", result)
+			}
+		}
+	}
+	if log := readFile(t, guardLog); log != "static:format\ntest:unit\n" {
+		t.Fatalf("unexpected executed guards: %q", log)
+	}
+}
+
+func TestPhaseBlocksStaticOrTestCommandRepositoryMutation(t *testing.T) {
+	for _, phase := range []model.Phase{model.PhaseStatic, model.PhaseTest} {
+		t.Run(string(phase), func(t *testing.T) {
+			root := t.TempDir()
+			writeExecutable(t, root, "mutate.sh", "#!/bin/sh\nprintf 'mutation\\n' > changed.txt\n")
+			cfg := testPipelineConfig()
+			cfg.Gates = []model.Gate{{Name: "mutator", Stage: "local", Phase: phase, Workdir: ".", Command: []string{"./mutate.sh"}, Required: true}}
+			writePipelineConfig(t, root, cfg)
+
+			receipt, _, err := Run(root, phase, false)
+			if err == nil || !strings.Contains(err.Error(), "mutated the repository") || receipt.Status != StatusBlocked || receipt.Passed {
+				t.Fatalf("mutating check was accepted: err=%v receipt=%#v", err, receipt)
+			}
+		})
+	}
+}
+
+func TestReadOnlyGateIgnoresDependencyCacheMutationButStillTracksSource(t *testing.T) {
+	root := t.TempDir()
+	writeExecutable(t, root, "cache.sh", "#!/bin/sh\nmkdir -p node_modules/pkg target\nprintf cache > node_modules/pkg/cache.txt\nprintf cache > target/cache.txt\n")
+	cfg := testPipelineConfig()
+	cfg.Gates = []model.Gate{{Name: "cache-writer", Stage: "local", Phase: model.PhaseStatic, Workdir: ".", Command: []string{"./cache.sh"}, Required: true}}
+	writePipelineConfig(t, root, cfg)
+
+	if receipt, _, err := Run(root, model.PhaseStatic, false); err != nil {
+		t.Fatalf("dependency/cache output was treated as source mutation: %v\n%#v", err, receipt)
+	}
+	writeExecutable(t, root, "cache.sh", "#!/bin/sh\nprintf mutation > source.txt\n")
+	if receipt, _, err := Run(root, model.PhaseStatic, false); err == nil || receipt.Passed || !strings.Contains(err.Error(), "mutated the repository") {
+		t.Fatalf("real source mutation was not blocked: err=%v receipt=%#v", err, receipt)
+	}
+}
+
+func TestPhaseAllWritesOneReceiptForEveryExecutedLifecyclePhase(t *testing.T) {
+	root := t.TempDir()
+	writeArtifactFixture(t, root)
+	writeExecutable(t, root, "review-clean.sh", `#!/bin/sh
+cat >/dev/null
+printf '{"findings":[]}\n'
+`)
+	cfg := testPipelineConfig()
+	for index := range cfg.Workflow.Reviewers {
+		cfg.Workflow.Reviewers[index].Command = []string{"./review-clean.sh"}
+	}
+	writePipelineConfig(t, root, cfg)
+
+	receipt, receiptPath, err := Run(root, model.PhaseAll, true)
+	if err != nil {
+		t.Fatalf("all phases failed: %v\n%#v", err, receipt)
+	}
+	expected := []model.Phase{
+		model.PhaseStatic,
+		model.PhaseTest,
+		model.PhaseReview,
+		model.PhaseArtifact,
+		model.PhaseStaging,
+		model.PhaseMigration,
+		model.PhaseProduction,
+		model.PhaseObserve,
+	}
+	if !receipt.Passed || receipt.Status != StatusPassed || len(receipt.Phases) != len(expected) || receiptPath == "" {
+		t.Fatalf("all receipt = %#v", receipt)
+	}
+	if receipt.ReviewHeadFingerprint == "" {
+		t.Fatal("aggregate all receipt lost review lineage evidence")
+	}
+	for index, phase := range expected {
+		result := receipt.Phases[index]
+		if result.Phase != phase || result.Status != StatusPassed || result.ReceiptPath == "" {
+			t.Fatalf("phase receipt %d = %#v, want %s", index, result, phase)
+		}
+		if _, err := os.Stat(result.ReceiptPath); err != nil {
+			t.Fatalf("phase receipt path is not durable: %v", err)
+		}
+	}
+}
+
+func TestReviewRunsSixRolesInParallelAndKeepsDeterministicOrder(t *testing.T) {
+	root := t.TempDir()
+	base := t.TempDir()
+	trusted := t.TempDir()
+	barrier := t.TempDir()
+	t.Setenv("GH_TOKEN", "must-not-reach-reviewers")
+	t.Setenv("REVIEW_AGENT_TOKEN", "review-allowlisted-secret")
+	t.Setenv("REVIEW_BARRIER_DIR", barrier)
+	writeFile(t, root, "node_modules/pkg/marker.txt", "must-not-be-copied\n")
+	writeFile(t, root, "vendor/pkg/marker.txt", "must-not-be-copied\n")
+	reviewCommand := filepath.Join(trusted, "review.sh")
+	writeExecutable(t, trusted, "review.sh", `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *repository_fingerprint*) ;;
+  *) exit 31 ;;
+esac
+test "$SAM_HARNESS_PIPELINE_PHASE" = review || exit 32
+test -z "$GH_TOKEN" || exit 34
+test "$REVIEW_AGENT_TOKEN" = review-allowlisted-secret || exit 35
+test -z "$(git remote)" || exit 36
+test ! -e node_modules/pkg/marker.txt || exit 37
+test ! -e vendor/pkg/marker.txt || exit 38
+: > "$REVIEW_BARRIER_DIR/$SAM_HARNESS_REVIEW_ROLE"
+attempt=0
+while [ "$(find "$REVIEW_BARRIER_DIR" -type f | wc -l | tr -d ' ')" -lt 6 ]; do
+  attempt=$((attempt + 1))
+  [ "$attempt" -lt 200 ] || exit 39
+  sleep 0.05
+done
+printf '{"findings":[{"role":"%s","severity":"P2","summary":"recorded","evidence":"%s"}]}\n' "$SAM_HARNESS_REVIEW_ROLE" "$REVIEW_AGENT_TOKEN"
+`)
+	if err := copyRepository(root, base, copyForReview); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testPipelineConfig()
+	cfg.CI.Providers = []string{"github"}
+	cfg.CI.SecretBindings = map[string][]model.CISecretBinding{"github": {
+		{Scope: model.CISecretScopeReview, Environment: "REVIEW_AGENT_TOKEN", Secret: "REVIEW_AGENT_TOKEN"},
+		{Scope: model.CISecretScopeReview, Environment: "REVIEW_BARRIER_DIR", Secret: "REVIEW_BARRIER_DIR"},
+	}}
+	for index := range cfg.Workflow.Reviewers {
+		cfg.Workflow.Reviewers[index].Command = []string{reviewCommand}
+		cfg.Workflow.Reviewers[index].TimeoutSeconds = 15
+		cfg.Workflow.Reviewers[index].TrustedExternalCommand = true
+	}
+	writePipelineConfig(t, root, cfg)
+	trustedConfig := filepath.Join(trusted, "config.yaml")
+	writePipelineConfigAt(t, trustedConfig, cfg)
+	baseSHA := initializeTestGit(t, base)
+	headSHA := initializeTestGit(t, root)
+
+	receipt, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{ConfigPath: trustedConfig, ReviewBase: base, ReviewBaseSHA: baseSHA, ReviewHeadSHA: headSHA})
+	if err != nil {
+		t.Fatalf("review failed: %v\n%#v", err, receipt)
+	}
+	if len(receipt.Commands) != len(model.ReviewerRoles) || len(receipt.Findings) != len(model.ReviewerRoles) {
+		t.Fatalf("review evidence is incomplete: %#v", receipt)
+	}
+	for index, role := range model.ReviewerRoles {
+		if receipt.Findings[index].Role != role || receipt.Commands[index].Name != "review:"+string(role) {
+			t.Fatalf("review evidence order is not deterministic: %#v", receipt)
+		}
+		if receipt.Findings[index].Evidence != "[REDACTED]" || strings.Contains(receipt.Commands[index].Output, "review-allowlisted-secret") {
+			t.Fatalf("review secret was persisted: finding=%#v command=%#v", receipt.Findings[index], receipt.Commands[index])
+		}
+	}
+}
+
+func TestReviewReceivesCanonicalBaseToHeadChangeEvidence(t *testing.T) {
+	root := t.TempDir()
+	promptDirectory := t.TempDir()
+	writeFile(t, root, "source.txt", "base\n")
+	writeExecutable(t, root, "review.sh", fmt.Sprintf(`#!/bin/sh
+payload=$(cat)
+printf '%%s' "$payload" > %q/"$SAM_HARNESS_REVIEW_ROLE.json"
+git diff --quiet HEAD -- && exit 51
+printf '{"findings":[{"role":"%%s","severity":"P3","summary":"change reviewed","evidence":"base-to-head"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
+`, promptDirectory))
+	cfg := testPipelineConfig()
+	for index := range cfg.Workflow.Reviewers {
+		cfg.Workflow.Reviewers[index].Command = []string{"./review.sh"}
+	}
+	writePipelineConfig(t, root, cfg)
+	base := t.TempDir()
+	if err := copyRepository(root, base, copyForReview); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "source.txt", "head\n")
+	baseSHA := initializeTestGit(t, base)
+	headSHA := initializeTestGit(t, root)
+
+	receipt, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{ReviewBase: base, ReviewBaseSHA: strings.ToUpper(baseSHA), ReviewHeadSHA: strings.ToUpper(headSHA)})
+	if err != nil {
+		t.Fatalf("review with base failed: %v\n%#v", err, receipt)
+	}
+	if receipt.ReviewBaseRoot == "" || receipt.ReviewBaseSHA != baseSHA || receipt.ReviewBaseFingerprint == "" || receipt.ReviewHeadSHA != headSHA || receipt.ReviewHeadFingerprint == "" || receipt.ReviewPatch == "" || receipt.ReviewPatchSHA256 == "" {
+		t.Fatalf("review receipt lacks base-to-head evidence: %#v", receipt)
+	}
+	patch, err := os.ReadFile(receipt.ReviewPatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(patch)
+	if receipt.ReviewPatchSHA256 != hex.EncodeToString(digest[:]) || !strings.Contains(string(patch), "-base") || !strings.Contains(string(patch), "+head") {
+		t.Fatalf("review patch is not canonical base-to-head evidence: receipt=%#v patch=%s", receipt, patch)
+	}
+	var prompt struct {
+		BaseRoot        string `json:"review_base_root"`
+		BaseSHA         string `json:"review_base_sha"`
+		BaseFingerprint string `json:"review_base_fingerprint"`
+		HeadSHA         string `json:"review_head_sha"`
+		HeadFingerprint string `json:"review_head_fingerprint"`
+		Patch           string `json:"review_patch"`
+		PatchSHA256     string `json:"review_patch_sha256"`
+	}
+	promptData, err := os.ReadFile(filepath.Join(promptDirectory, string(model.ReviewerArchitecture)+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(promptData, &prompt); err != nil {
+		t.Fatal(err)
+	}
+	if prompt.BaseRoot != receipt.ReviewBaseRoot || prompt.BaseSHA != receipt.ReviewBaseSHA || prompt.BaseFingerprint != receipt.ReviewBaseFingerprint || prompt.HeadSHA != receipt.ReviewHeadSHA || prompt.HeadFingerprint != receipt.ReviewHeadFingerprint || prompt.Patch != string(patch) || prompt.PatchSHA256 != receipt.ReviewPatchSHA256 {
+		t.Fatalf("review prompt lineage differs from receipt: prompt=%#v receipt=%#v", prompt, receipt)
+	}
+}
+
+func TestSecretBearingReviewRejectsTargetControlledExecutableBeforeItRuns(t *testing.T) {
+	root := t.TempDir()
+	base := t.TempDir()
+	trusted := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "target-reviewer-ran")
+	writeExecutable(t, root, "reviewer", fmt.Sprintf("#!/bin/sh\ncat >/dev/null\nprintf ran > %q\n", marker))
+	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("REVIEW_TOKEN", "review-secret")
+
+	cfg := testPipelineConfig()
+	cfg.CI.Providers = []string{"github"}
+	cfg.CI.SecretBindings = map[string][]model.CISecretBinding{"github": {{Scope: model.CISecretScopeReview, Environment: "REVIEW_TOKEN", Secret: "REVIEW_TOKEN"}}}
+	for index := range cfg.Workflow.Reviewers {
+		cfg.Workflow.Reviewers[index].Command = []string{"reviewer"}
+		cfg.Workflow.Reviewers[index].TrustedExternalCommand = true
+	}
+	writePipelineConfig(t, root, cfg)
+	if err := copyRepository(root, base, copyForReview); err != nil {
+		t.Fatal(err)
+	}
+	trustedConfig := filepath.Join(trusted, "config.yaml")
+	writePipelineConfigAt(t, trustedConfig, cfg)
+	baseSHA := initializeTestGit(t, base)
+	headSHA := initializeTestGit(t, root)
+
+	receipt, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{ConfigPath: trustedConfig, ReviewBase: base, ReviewBaseSHA: baseSHA, ReviewHeadSHA: headSHA})
+	if err == nil || receipt.Status != StatusBlocked || len(receipt.Commands) == 0 || !strings.Contains(receipt.Commands[0].Output, "resolves inside the target repository") {
+		t.Fatalf("target-controlled reviewer was accepted: err=%v receipt=%#v", err, receipt)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("target-controlled reviewer executed with a secret: %v", err)
+	}
+}
+
+func TestSecretBearingReviewUsesTrustedConfigArgumentAndRequiresBase(t *testing.T) {
+	root := t.TempDir()
+	base := t.TempDir()
+	trusted := t.TempDir()
+	t.Setenv("REVIEW_TOKEN", "review-secret")
+	writeFile(t, root, "reviewer-output.schema.json", "target-controlled\n")
+	reviewer := filepath.Join(trusted, "reviewer")
+	writeExecutable(t, trusted, "reviewer", `#!/bin/sh
+payload=$(cat)
+test "$REVIEW_TOKEN" = review-secret || exit 61
+test "$(cat "$1")" = trusted || exit 62
+printf '{"findings":[{"role":"%s","severity":"P3","summary":"trusted","evidence":"schema"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
+`)
+	writeFile(t, trusted, "reviewer-output.schema.json", "trusted\n")
+
+	cfg := testPipelineConfig()
+	cfg.CI.Providers = []string{"github"}
+	cfg.CI.SecretBindings = map[string][]model.CISecretBinding{"github": {{Scope: model.CISecretScopeReview, Environment: "REVIEW_TOKEN", Secret: "REVIEW_TOKEN"}}}
+	for index := range cfg.Workflow.Reviewers {
+		cfg.Workflow.Reviewers[index].Command = []string{reviewer, "reviewer-output.schema.json"}
+		cfg.Workflow.Reviewers[index].TrustedExternalCommand = true
+		cfg.Workflow.Reviewers[index].TrustedConfigArguments = []int{1}
+	}
+	writePipelineConfig(t, root, cfg)
+	if err := copyRepository(root, base, copyForReview); err != nil {
+		t.Fatal(err)
+	}
+	trustedConfig := filepath.Join(trusted, "config.yaml")
+	writePipelineConfigAt(t, trustedConfig, cfg)
+	baseSHA := initializeTestGit(t, base)
+	headSHA := initializeTestGit(t, root)
+
+	if receipt, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{ConfigPath: trustedConfig, ReviewBase: base}); err == nil || receipt.Status != StatusBlocked || !strings.Contains(err.Error(), "requires --review-base") {
+		t.Fatalf("secret-bearing review without commit identities was accepted: err=%v receipt=%#v", err, receipt)
+	}
+	receipt, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{ConfigPath: trustedConfig, ReviewBase: base, ReviewBaseSHA: baseSHA, ReviewHeadSHA: headSHA})
+	if err != nil || !receipt.Passed || len(receipt.Findings) != len(model.ReviewerRoles) {
+		t.Fatalf("trusted reviewer config argument failed: err=%v receipt=%#v", err, receipt)
+	}
+}
+
+func TestReviewBaseMustBeAbsoluteRegularDirectory(t *testing.T) {
+	root := t.TempDir()
+	writePipelineConfig(t, root, testPipelineConfig())
+	if _, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{ReviewBase: "relative/base"}); err == nil || !strings.Contains(err.Error(), "absolute directory") {
+		t.Fatalf("relative review base was accepted: %v", err)
+	}
+	base := t.TempDir()
+	link := filepath.Join(t.TempDir(), "base-link")
+	if err := os.Symlink(base, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{ReviewBase: link}); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("symlink review base was accepted: %v", err)
+	}
+}
+
+func TestReviewIdentityArgumentsArePairedScopedAndValidated(t *testing.T) {
+	root := t.TempDir()
+	base := t.TempDir()
+	writePipelineConfig(t, root, testPipelineConfig())
+	valid := strings.Repeat("a", 40)
+	base64, head64, err := normalizeReviewIdentities(base, strings.Repeat("A", 64), strings.Repeat("B", 64))
+	if err != nil || base64 != strings.Repeat("a", 64) || head64 != strings.Repeat("b", 64) {
+		t.Fatalf("64-character identities were not normalized: base=%q head=%q err=%v", base64, head64, err)
+	}
+	for _, scenario := range []struct {
+		name    string
+		phase   model.Phase
+		options RunOptions
+		want    string
+	}{
+		{name: "wrong phase", phase: model.PhaseStatic, options: RunOptions{ReviewBase: base, ReviewBaseSHA: valid, ReviewHeadSHA: valid}, want: "only valid for review or all"},
+		{name: "missing head", phase: model.PhaseReview, options: RunOptions{ReviewBase: base, ReviewBaseSHA: valid}, want: "must be provided together"},
+		{name: "missing base", phase: model.PhaseReview, options: RunOptions{ReviewBaseSHA: valid, ReviewHeadSHA: valid}, want: "require --review-base"},
+		{name: "bad length", phase: model.PhaseReview, options: RunOptions{ReviewBase: base, ReviewBaseSHA: "abcd", ReviewHeadSHA: valid}, want: "40 or 64"},
+		{name: "non hex", phase: model.PhaseReview, options: RunOptions{ReviewBase: base, ReviewBaseSHA: strings.Repeat("z", 40), ReviewHeadSHA: valid}, want: "hexadecimal"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			if _, _, err := RunWithOptions(root, scenario.phase, false, scenario.options); err == nil || !strings.Contains(err.Error(), scenario.want) {
+				t.Fatalf("identity arguments accepted: err=%v", err)
+			}
+		})
+	}
+}
+
+func TestReviewRejectsGitIdentityMismatchBeforeReviewerRuns(t *testing.T) {
+	root := t.TempDir()
+	base := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "reviewer-ran")
+	writeExecutable(t, root, "review.sh", fmt.Sprintf("#!/bin/sh\ncat >/dev/null\nprintf ran > %q\n", marker))
+	cfg := testPipelineConfig()
+	for index := range cfg.Workflow.Reviewers {
+		cfg.Workflow.Reviewers[index].Command = []string{"./review.sh"}
+	}
+	writePipelineConfig(t, root, cfg)
+	if err := copyRepository(root, base, copyForReview); err != nil {
+		t.Fatal(err)
+	}
+	baseSHA := initializeTestGit(t, base)
+	initializeTestGit(t, root)
+
+	receipt, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{ReviewBase: base, ReviewBaseSHA: baseSHA, ReviewHeadSHA: strings.Repeat("0", 40)})
+	if err == nil || receipt.Status != StatusBlocked || !strings.Contains(err.Error(), "review head SHA mismatch") {
+		t.Fatalf("mismatched head identity was accepted: err=%v receipt=%#v", err, receipt)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("reviewer ran before identity validation: %v", err)
+	}
+}
+
+func TestReviewDetectsBaseAndHeadGitIdentityDrift(t *testing.T) {
+	for _, drift := range []string{"base", "head"} {
+		t.Run(drift, func(t *testing.T) {
+			root := t.TempDir()
+			base := t.TempDir()
+			driftRoot := base
+			if drift == "head" {
+				driftRoot = root
+			}
+			writeExecutable(t, root, "review.sh", fmt.Sprintf(`#!/bin/sh
+cat >/dev/null
+git -C %q -c user.name=review-drift -c user.email=review@localhost commit --allow-empty --no-verify -m drift >/dev/null 2>&1 || true
+printf '{"findings":[{"role":"%%s","severity":"P3","summary":"reviewed","evidence":"identity"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
+`, driftRoot))
+			cfg := testPipelineConfig()
+			for index := range cfg.Workflow.Reviewers {
+				cfg.Workflow.Reviewers[index].Command = []string{"./review.sh"}
+				cfg.Workflow.Reviewers[index].TimeoutSeconds = 30
+			}
+			writePipelineConfig(t, root, cfg)
+			if err := copyRepository(root, base, copyForReview); err != nil {
+				t.Fatal(err)
+			}
+			baseSHA := initializeTestGit(t, base)
+			headSHA := initializeTestGit(t, root)
+
+			receipt, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{ReviewBase: base, ReviewBaseSHA: baseSHA, ReviewHeadSHA: headSHA})
+			if err == nil || receipt.Status != StatusBlocked || !strings.Contains(err.Error(), "after reviewers SHA mismatch") {
+				t.Fatalf("%s identity drift was accepted: err=%v receipt=%#v", drift, err, receipt)
+			}
+		})
+	}
+}
+
+func TestReviewBlocksP1MalformedOutputAndRepositoryMutation(t *testing.T) {
+	for _, scenario := range []struct {
+		name       string
+		security   string
+		errorMatch string
+	}{
+		{
+			name:       "P1",
+			security:   `printf '{"findings":[{"role":"security","severity":"P1","summary":"blocker","evidence":"fixture"}]}\n'`,
+			errorMatch: "review blocked",
+		},
+		{name: "malformed", security: `printf 'not-json\n'`, errorMatch: "review blocked"},
+		{name: "mutation", security: `printf 'mutation\n' > source.txt; printf '{"findings":[]}\n'`, errorMatch: "mutated the repository"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeExecutable(t, root, "review.sh", `#!/bin/sh
+cat >/dev/null
+if [ "$SAM_HARNESS_REVIEW_ROLE" = security ]; then
+  `+scenario.security+`
+else
+  printf '{"findings":[]}\n'
+fi
+`)
+			cfg := testPipelineConfig()
+			for index := range cfg.Workflow.Reviewers {
+				cfg.Workflow.Reviewers[index].Command = []string{"./review.sh"}
+			}
+			writePipelineConfig(t, root, cfg)
+
+			receipt, _, err := Run(root, model.PhaseReview, false)
+			if err == nil || !strings.Contains(err.Error(), scenario.errorMatch) {
+				t.Fatalf("review error = %v, receipt = %#v", err, receipt)
+			}
+			if receipt.Status != StatusBlocked || receipt.Passed {
+				t.Fatalf("unsafe review did not block: %#v", receipt)
+			}
+			if scenario.name == "mutation" {
+				if _, statErr := os.Stat(filepath.Join(root, "source.txt")); !os.IsNotExist(statErr) {
+					t.Fatalf("reviewer mutation escaped its isolated copy: %v", statErr)
+				}
+			}
+		})
+	}
+}
+
+func TestArtifactDigestPromotionAndOrderedCanaries(t *testing.T) {
+	root := t.TempDir()
+	writeExecutable(t, root, "build.sh", `#!/bin/sh
+test "$SAM_HARNESS_PIPELINE_PHASE" = artifact
+mkdir -p out .sam-harness/evidence
+printf 'artifact-v1\n' > out/app.bin
+printf 'build\n' >> .sam-harness/evidence/build.log
+`)
+	writeExecutable(t, root, "sbom.sh", `#!/bin/sh
+test "$SAM_HARNESS_PIPELINE_PHASE" = artifact
+printf '{"sbom":true}\n' > out/sbom.json
+`)
+	writeExecutable(t, root, "provenance.sh", `#!/bin/sh
+test "$SAM_HARNESS_PIPELINE_PHASE" = artifact
+printf '{"provenance":true}\n' > out/provenance.json
+`)
+	writeExecutable(t, root, "deploy.sh", `#!/bin/sh
+test -n "$SAM_HARNESS_PIPELINE_PHASE"
+test "$SAM_HARNESS_ARTIFACT_PATH" = out/app.bin
+test -n "$SAM_HARNESS_ARTIFACT_SHA256"
+printf '%s:%s\n' "$SAM_HARNESS_PIPELINE_PHASE" "${SAM_HARNESS_CANARY_PERCENTAGE:-none}" >> .sam-harness/evidence/deploy.log
+`)
+	writeExecutable(t, root, "health.sh", `#!/bin/sh
+test -n "$SAM_HARNESS_PIPELINE_PHASE"
+printf 'health:%s:%s\n' "$SAM_HARNESS_PIPELINE_PHASE" "${SAM_HARNESS_CANARY_PERCENTAGE:-none}" >> .sam-harness/evidence/deploy.log
+`)
+	cfg := testPipelineConfig()
+	cfg.Workflow.Artifact.Build.Command = []string{"./build.sh"}
+	cfg.Workflow.Artifact.SBOM.Command = []string{"./sbom.sh"}
+	cfg.Workflow.Artifact.Provenance.Command = []string{"./provenance.sh"}
+	cfg.Workflow.Deployment.Staging.Command = []string{"./deploy.sh"}
+	cfg.Workflow.Deployment.Production.Command = []string{"./deploy.sh"}
+	cfg.Workflow.Deployment.HealthChecks[0].Command = []string{"./health.sh"}
+	cfg.Workflow.Deployment.CanaryPercentages = []int{10, 50, 100}
+	writePipelineConfig(t, root, cfg)
+
+	artifactReceipt, _, err := Run(root, model.PhaseArtifact, true)
+	if err != nil {
+		t.Fatalf("artifact failed: %v\n%#v", err, artifactReceipt)
+	}
+	expected := sha256.Sum256([]byte("artifact-v1\n"))
+	if artifactReceipt.Artifact == nil || artifactReceipt.Artifact.SHA256 != hex.EncodeToString(expected[:]) {
+		t.Fatalf("artifact digest = %#v", artifactReceipt.Artifact)
+	}
+	if artifactReceipt.Artifact.SourceFingerprint == "" || artifactReceipt.Artifact.SBOMSHA256 == "" || artifactReceipt.Artifact.ProvenanceSHA256 == "" {
+		t.Fatalf("artifact receipt is not bound to source and all evidence digests: %#v", artifactReceipt.Artifact)
+	}
+	if _, _, err := Run(root, model.PhaseStaging, false); err != nil {
+		t.Fatalf("staging failed: %v", err)
+	}
+	productionReceipt, _, err := Run(root, model.PhaseProduction, false)
+	if err != nil {
+		t.Fatalf("production failed: %v\n%#v", err, productionReceipt)
+	}
+	log := readFile(t, filepath.Join(root, ".sam-harness/evidence/deploy.log"))
+	expectedLog := "staging:none\nhealth:staging:none\nproduction:10\nhealth:production:10\nproduction:50\nhealth:production:50\nproduction:100\nhealth:production:100\n"
+	if log != expectedLog {
+		t.Fatalf("promotion order = %q, want %q", log, expectedLog)
+	}
+	if strings.Count(readFile(t, filepath.Join(root, ".sam-harness/evidence/build.log")), "build") != 1 {
+		t.Fatal("artifact was rebuilt during promotion")
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "out/app.bin"), []byte("tampered\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := readFile(t, filepath.Join(root, ".sam-harness/evidence/deploy.log"))
+	receipt, _, err := Run(root, model.PhaseStaging, false)
+	if err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+		t.Fatalf("tampered artifact was promoted: err=%v receipt=%#v", err, receipt)
+	}
+	if after := readFile(t, filepath.Join(root, ".sam-harness/evidence/deploy.log")); after != before {
+		t.Fatal("deployment command ran after artifact mismatch")
+	}
+}
+
+func TestArtifactBlocksSourceCheckoutMutation(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "source.txt"), []byte("original\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, root, "build.sh", `#!/bin/sh
+mkdir -p out
+printf 'artifact-v1\n' > out/app.bin
+printf 'mutated\n' > source.txt
+`)
+	writeExecutable(t, root, "sbom.sh", "#!/bin/sh\nprintf '{}\\n' > out/sbom.json\n")
+	writeExecutable(t, root, "provenance.sh", "#!/bin/sh\nprintf '{}\\n' > out/provenance.json\n")
+	cfg := testPipelineConfig()
+	cfg.Workflow.Artifact.Build.Command = []string{"./build.sh"}
+	cfg.Workflow.Artifact.SBOM.Command = []string{"./sbom.sh"}
+	cfg.Workflow.Artifact.Provenance.Command = []string{"./provenance.sh"}
+	writePipelineConfig(t, root, cfg)
+
+	receipt, _, err := Run(root, model.PhaseArtifact, false)
+	if err == nil || !strings.Contains(err.Error(), "mutated the source checkout") || receipt.Passed {
+		t.Fatalf("artifact source mutation was accepted: err=%v receipt=%#v", err, receipt)
+	}
+}
+
+func TestStandalonePromotionRejectsSourceAndEvidenceDigestDrift(t *testing.T) {
+	for _, scenario := range []struct {
+		name   string
+		mutate string
+	}{
+		{name: "source", mutate: "source.txt"},
+		{name: "SBOM", mutate: "out/sbom.json"},
+		{name: "provenance", mutate: "out/provenance.json"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeArtifactFixture(t, root)
+			if err := os.WriteFile(filepath.Join(root, "source.txt"), []byte("original\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(t.TempDir(), "deployed")
+			writeExecutable(t, root, "deploy.sh", "#!/bin/sh\nprintf 'ran\\n' > \"$1\"\n")
+			cfg := testPipelineConfig()
+			cfg.Workflow.Deployment.Staging.Command = []string{"./deploy.sh", marker}
+			writePipelineConfig(t, root, cfg)
+			writePassingArtifactReceipt(t, root, cfg)
+			if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(scenario.mutate)), []byte("drifted\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			receipt, _, err := Run(root, model.PhaseStaging, false)
+			if err == nil || receipt.Passed || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(scenario.name)) {
+				t.Fatalf("%s drift was accepted: err=%v receipt=%#v", scenario.name, err, receipt)
+			}
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatalf("promotion ran despite %s drift: %v", scenario.name, err)
+			}
+		})
+	}
+}
+
+func TestPromotionRechecksSBOMAndProvenanceAfterCommands(t *testing.T) {
+	for _, scenario := range []struct {
+		name       string
+		deployment string
+		health     string
+	}{
+		{name: "SBOM after promotion", deployment: "printf 'changed\\n' > out/sbom.json", health: ":"},
+		{name: "provenance after health", deployment: ":", health: "printf 'changed\\n' > out/provenance.json"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeArtifactFixture(t, root)
+			writeExecutable(t, root, "deploy.sh", "#!/bin/sh\n"+scenario.deployment+"\n")
+			writeExecutable(t, root, "health.sh", "#!/bin/sh\n"+scenario.health+"\n")
+			cfg := testPipelineConfig()
+			cfg.Workflow.Deployment.Production.Command = []string{"./deploy.sh"}
+			cfg.Workflow.Deployment.HealthChecks[0].Command = []string{"./health.sh"}
+			cfg.Workflow.Deployment.CanaryPercentages = []int{100}
+			writePipelineConfig(t, root, cfg)
+			writePassingArtifactReceipt(t, root, cfg)
+
+			receipt, _, err := Run(root, model.PhaseProduction, false)
+			if err == nil || receipt.Passed || !strings.Contains(err.Error(), "digest mismatch") {
+				t.Fatalf("evidence mutation was accepted: err=%v receipt=%#v", err, receipt)
+			}
+		})
+	}
+}
+
+func TestStandalonePromotionUsesOnlyValidArtifactPhaseReceipt(t *testing.T) {
+	root := t.TempDir()
+	writeArtifactFixture(t, root)
+	cfg := testPipelineConfig()
+	writePipelineConfig(t, root, cfg)
+	validPath := writePassingArtifactReceipt(t, root, cfg)
+
+	fake := newReceipt(root, model.PhaseStaging, "fabricated")
+	fake.Passed = true
+	fake.Status = StatusPassed
+	fake.Artifact = &ArtifactEvidence{Path: cfg.Workflow.Artifact.ArtifactPath, SHA256: "fabricated"}
+	fake.FinishedAt = time.Now().UTC()
+	if _, err := writeReceiptFile(root, cfg.Evidence.ReceiptDirectory, fake); err != nil {
+		t.Fatal(err)
+	}
+
+	receipt, _, err := Run(root, model.PhaseStaging, false)
+	if err != nil {
+		t.Fatalf("valid artifact receipt was hidden by unrelated newer receipt: %v\n%#v", err, receipt)
+	}
+	if receipt.SourceReceipt != validPath {
+		t.Fatalf("promotion source receipt = %q, want %q", receipt.SourceReceipt, validPath)
+	}
+}
+
+func TestProductionStopsAfterFirstFailingCanaryHealthGate(t *testing.T) {
+	root := t.TempDir()
+	writeArtifactFixture(t, root)
+	writeExecutable(t, root, "deploy.sh", `#!/bin/sh
+printf '%s\n' "$SAM_HARNESS_CANARY_PERCENTAGE" >> .sam-harness/evidence/canary.log
+`)
+	writeExecutable(t, root, "health.sh", `#!/bin/sh
+printf 'health:%s\n' "$SAM_HARNESS_CANARY_PERCENTAGE" >> .sam-harness/evidence/canary.log
+[ "$SAM_HARNESS_CANARY_PERCENTAGE" != 50 ]
+`)
+	cfg := testPipelineConfig()
+	cfg.Workflow.Deployment.Production.Command = []string{"./deploy.sh"}
+	cfg.Workflow.Deployment.HealthChecks[0].Command = []string{"./health.sh"}
+	cfg.Workflow.Deployment.CanaryPercentages = []int{10, 50, 100}
+	writePipelineConfig(t, root, cfg)
+	writePassingArtifactReceipt(t, root, cfg)
+
+	receipt, _, err := Run(root, model.PhaseProduction, false)
+	if err == nil || receipt.Passed {
+		t.Fatalf("production passed a failing canary: err=%v receipt=%#v", err, receipt)
+	}
+	if log := readFile(t, filepath.Join(root, ".sam-harness/evidence/canary.log")); log != "10\nhealth:10\n50\nhealth:50\n" {
+		t.Fatalf("canary did not stop at first failure: %q", log)
+	}
+}
+
+func TestArtifactMutationDuringOnlyProductionCanaryBlocksBeforeHealth(t *testing.T) {
+	root := t.TempDir()
+	healthMarker := filepath.Join(t.TempDir(), "health-ran")
+	writeArtifactFixture(t, root)
+	writeExecutable(t, root, "mutating-deploy.sh", `#!/bin/sh
+test "$SAM_HARNESS_PIPELINE_PHASE" = production
+test "$SAM_HARNESS_CANARY_PERCENTAGE" = 100
+printf 'mutated-during-promotion\n' > out/app.bin
+`)
+	writeExecutable(t, root, "health-marker.sh", `#!/bin/sh
+printf 'ran\n' > "$1"
+`)
+	cfg := testPipelineConfig()
+	cfg.Workflow.Deployment.Production.Command = []string{"./mutating-deploy.sh"}
+	cfg.Workflow.Deployment.HealthChecks[0].Command = []string{"./health-marker.sh", healthMarker}
+	cfg.Workflow.Deployment.CanaryPercentages = []int{100}
+	writePipelineConfig(t, root, cfg)
+	writePassingArtifactReceipt(t, root, cfg)
+
+	receipt, _, err := Run(root, model.PhaseProduction, false)
+	if err == nil || !strings.Contains(err.Error(), "after promotion command") || !strings.Contains(err.Error(), "digest mismatch") {
+		t.Fatalf("last-canary artifact mutation was accepted: err=%v receipt=%#v", err, receipt)
+	}
+	if receipt.Passed || receipt.Status != StatusFailed || len(receipt.Commands) != 1 {
+		t.Fatalf("mutation receipt is not fail-closed: %#v", receipt)
+	}
+	if _, err := os.Stat(healthMarker); !os.IsNotExist(err) {
+		t.Fatalf("health command ran after artifact mutation: %v", err)
+	}
+}
+
+func TestPhaseAuthorityBlocksDeploymentCommands(t *testing.T) {
+	root := t.TempDir()
+	cfg := testPipelineConfig()
+	cfg.Authority.Deploy = false
+	fingerprint, err := repositoryFingerprint(root, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, phase := range []model.Phase{model.PhaseStaging, model.PhaseProduction, model.PhaseObserve, model.PhaseRollback, model.PhaseMigration} {
+		receipt, err := runPhase(root, cfg, phase, fingerprint, nil, "")
+		if err == nil || receipt.Status != StatusBlocked || len(receipt.Commands) != 0 {
+			t.Fatalf("%s crossed deploy authority: err=%v receipt=%#v", phase, err, receipt)
+		}
+	}
+}
+
+func TestReviewRequiresNetworkAuthority(t *testing.T) {
+	root := t.TempDir()
+	cfg := testPipelineConfig()
+	cfg.Authority.Network = false
+	fingerprint, err := repositoryFingerprint(root, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := runPhase(root, cfg, model.PhaseReview, fingerprint, nil, "")
+	if err == nil || receipt.Status != StatusBlocked || len(receipt.Commands) != 0 || !strings.Contains(err.Error(), "network authority") {
+		t.Fatalf("review crossed network authority: err=%v receipt=%#v", err, receipt)
+	}
+}
+
+func TestReviewRequiresFilesystemReadOnlyAttestation(t *testing.T) {
+	cfg := testPipelineConfig()
+	cfg.Workflow.Reviewers[0].FilesystemReadOnly = false
+	if err := validateReviewerSet(cfg.Workflow.Reviewers); err == nil || !strings.Contains(err.Error(), "filesystem_read_only attestation") {
+		t.Fatalf("reviewer without filesystem attestation was accepted: %v", err)
+	}
+}
+
+func TestRemoteWorkflowPhasesRequireNetworkAuthority(t *testing.T) {
+	root := t.TempDir()
+	cfg := testPipelineConfig()
+	cfg.Authority.Network = false
+	fingerprint, err := repositoryFingerprint(root, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, phase := range []model.Phase{model.PhaseStaging, model.PhaseProduction, model.PhaseObserve, model.PhaseRollback, model.PhaseMigration} {
+		receipt, err := runPhase(root, cfg, phase, fingerprint, nil, "")
+		if err == nil || receipt.Status != StatusBlocked || len(receipt.Commands) != 0 || !strings.Contains(err.Error(), "network authority") {
+			t.Fatalf("%s crossed network authority: err=%v receipt=%#v", phase, err, receipt)
+		}
+	}
+}
+
+func TestProductionAndRollbackRequireReleaseAuthority(t *testing.T) {
+	root := t.TempDir()
+	cfg := testPipelineConfig()
+	cfg.Authority.Deploy = true
+	cfg.Authority.Release = false
+	fingerprint, err := sourceFingerprint(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, phase := range []model.Phase{model.PhaseProduction, model.PhaseRollback} {
+		receipt, err := runPhase(root, cfg, phase, fingerprint, nil, "")
+		if err == nil || receipt.Status != StatusBlocked || len(receipt.Commands) != 0 || !strings.Contains(err.Error(), "release authority") {
+			t.Fatalf("%s crossed release authority: err=%v receipt=%#v", phase, err, receipt)
+		}
+	}
+}
+
+func TestRequiredGateRunsAsWorkflowPhasePrecondition(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "deployed")
+	writeExecutable(t, root, "gate.sh", "#!/bin/sh\nexit 17\n")
+	writeExecutable(t, root, "deploy.sh", "#!/bin/sh\nprintf 'ran\\n' > \"$1\"\n")
+	cfg := testPipelineConfig()
+	cfg.Gates = []model.Gate{{Name: "production-precondition", Stage: "production", Phase: model.PhaseProduction, Workdir: ".", Command: []string{"./gate.sh"}, Required: true}}
+	cfg.Workflow.Deployment.Production.Command = []string{"./deploy.sh", marker}
+	writePipelineConfig(t, root, cfg)
+
+	receipt, _, err := Run(root, model.PhaseProduction, false)
+	if err == nil || receipt.Passed || len(receipt.Commands) != 1 || receipt.Commands[0].Name != "production-precondition" {
+		t.Fatalf("required workflow gate was not enforced first: err=%v receipt=%#v", err, receipt)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("production ran after failed precondition: %v", err)
+	}
+}
+
+func TestReceiptOutputRedactsSensitiveEnvironmentValues(t *testing.T) {
+	root := t.TempDir()
+	secret := "receipt-must-not-contain-this-secret"
+	t.Setenv("DEPLOY_API_TOKEN", secret)
+	writeExecutable(t, root, "print-secret.sh", "#!/bin/sh\nprintf '%s\\n' \"$DEPLOY_API_TOKEN\"\n")
+	cfg := testPipelineConfig()
+	cfg.Gates = []model.Gate{{Name: "secret-printer", Stage: "local", Phase: model.PhaseStatic, Workdir: ".", Command: []string{"./print-secret.sh"}, Required: true}}
+	writePipelineConfig(t, root, cfg)
+
+	receipt, receiptPath, err := Run(root, model.PhaseStatic, true)
+	if err != nil {
+		t.Fatalf("secret fixture failed: %v", err)
+	}
+	data, err := os.ReadFile(receiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(receipt.Commands[0].Output, secret) || strings.Contains(string(data), secret) || !strings.Contains(receipt.Commands[0].Output, "[REDACTED]") {
+		t.Fatalf("secret was persisted: result=%q receipt=%s", receipt.Commands[0].Output, data)
+	}
+}
+
+func writeArtifactFixture(t *testing.T, root string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, "out"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, value := range map[string]string{
+		"out/app.bin":         "artifact-v1\n",
+		"out/sbom.json":       "{}\n",
+		"out/provenance.json": "{}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, path), []byte(value), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func writePassingArtifactReceipt(t *testing.T, root string, cfg model.Config) string {
+	t.Helper()
+	_, digest, err := hashRepositoryFile(root, cfg.Workflow.Artifact.ArtifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sbomDigest, err := hashRepositoryFile(root, cfg.Workflow.Artifact.SBOMPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, provenanceDigest, err := hashRepositoryFile(root, cfg.Workflow.Artifact.ProvenancePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := repositoryFingerprint(root, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := newReceipt(root, model.PhaseArtifact, fingerprint)
+	receipt.Passed = true
+	receipt.Status = StatusPassed
+	receipt.Artifact = &ArtifactEvidence{
+		Path:              cfg.Workflow.Artifact.ArtifactPath,
+		SHA256:            digest,
+		SBOMPath:          cfg.Workflow.Artifact.SBOMPath,
+		SBOMSHA256:        sbomDigest,
+		ProvenancePath:    cfg.Workflow.Artifact.ProvenancePath,
+		ProvenanceSHA256:  provenanceDigest,
+		SourceFingerprint: fingerprint,
+	}
+	receipt.FinalFingerprint = fingerprint
+	receipt.FinishedAt = receipt.StartedAt
+	path, err := writeReceiptFile(root, cfg.Evidence.ReceiptDirectory, receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func testPipelineConfig() model.Config {
+	reviewers := make([]model.ReviewerConfig, 0, len(model.ReviewerRoles))
+	for _, role := range model.ReviewerRoles {
+		reviewers = append(reviewers, model.ReviewerConfig{Role: role, Command: []string{"go", "version"}, TimeoutSeconds: 5, FilesystemReadOnly: true})
+	}
+	command := func(name string) model.CommandSpec {
+		return model.CommandSpec{Name: name, Workdir: ".", Command: []string{"go", "version"}, Required: true, TimeoutSeconds: 5}
+	}
+	return model.Config{
+		SchemaVersion:  model.SchemaVersion,
+		HarnessVersion: model.HarnessVersion,
+		Profile:        model.ProfileBaseline,
+		Repository:     "fixture",
+		Authority:      model.Authority{WriteRepository: true, Network: true, Deploy: true, Release: true},
+		Evidence:       model.Evidence{ReceiptDirectory: ".sam-harness/evidence", RequiredStates: []string{"source"}},
+		Governance: model.GovernanceConfig{
+			Approvers:       []string{"owner"},
+			Criticality:     "low",
+			DataSensitivity: "public",
+		},
+		Workflow: &model.WorkflowConfig{
+			Enabled:      true,
+			StaticGuards: waivedGuardSet(model.StaticGuardCategories),
+			TestGuards:   waivedGuardSet(model.TestGuardCategories),
+			Reviewers:    reviewers,
+			Correction: model.CorrectionConfig{
+				Enabled: false,
+			},
+			Artifact: model.ArtifactWorkflow{
+				Build:          command("build"),
+				ArtifactPath:   "out/app.bin",
+				SBOM:           command("sbom"),
+				SBOMPath:       "out/sbom.json",
+				Provenance:     command("provenance"),
+				ProvenancePath: "out/provenance.json",
+			},
+			Deployment: model.DeploymentWorkflow{
+				Staging:           command("staging"),
+				Production:        command("production"),
+				Rollback:          command("rollback"),
+				HealthChecks:      []model.CommandSpec{command("health")},
+				ObservationChecks: []model.CommandSpec{command("observe")},
+				CanaryPercentages: []int{100},
+			},
+			Migration:       []model.CommandSpec{command("migration")},
+			ReleaseSchedule: model.ReleaseSchedule{Cron: "0 9 * * 1", Timezone: "UTC"},
+		},
+	}
+}
+
+func waivedGuardSet(categories []string) model.GuardSet {
+	waivers := make(map[string]string, len(categories))
+	for _, category := range categories {
+		waivers[category] = "not applicable in this focused runtime fixture"
+	}
+	return model.GuardSet{Commands: map[string]model.CommandSpec{}, Waivers: waivers}
+}
+
+func writePipelineConfig(t *testing.T, root string, cfg model.Config) {
+	t.Helper()
+	path := filepath.Join(root, ".sam-harness", "config.yaml")
+	writePipelineConfigAt(t, path, cfg)
+	if err := os.MkdirAll(filepath.Join(root, ".sam-harness", "evidence"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writePipelineConfigAt(t *testing.T, path string, cfg model.Config) {
+	t.Helper()
+	data, err := config.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeExecutable(t *testing.T, root, relative, content string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(relative))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func initializeTestGit(t *testing.T, root string) string {
+	t.Helper()
+	if err := initializeSandboxGit(root); err != nil {
+		t.Fatalf("initialize test Git repository: %v", err)
+	}
+	command := exec.Command("git", "-C", root, "rev-parse", "HEAD")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("read test Git HEAD: %v: %s", err, output)
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}

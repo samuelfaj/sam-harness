@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/samuelfaj/sam-harness/internal/config"
 	"github.com/samuelfaj/sam-harness/internal/model"
 	"github.com/samuelfaj/sam-harness/internal/render"
 )
@@ -47,6 +48,30 @@ func Create(scan model.ScanResult, requested model.Profile, answers model.Answer
 		resolvedScan.CIProviders = append([]string(nil), answers.CIProviders...)
 		sort.Strings(resolvedScan.CIProviders)
 	}
+	selectedProviders := make(map[string]bool, len(resolvedScan.CIProviders))
+	for _, provider := range resolvedScan.CIProviders {
+		selectedProviders[provider] = true
+	}
+	for provider := range answers.CISecretBindings {
+		if !selectedProviders[provider] {
+			return model.Plan{}, fmt.Errorf("CI secret bindings do not match a selected provider: %s", provider)
+		}
+	}
+	for provider := range answers.CISecretWaivers {
+		if !selectedProviders[provider] {
+			return model.Plan{}, fmt.Errorf("CI secret waiver does not match a selected provider: %s", provider)
+		}
+	}
+	for provider := range answers.AgentSecretEnvironments {
+		if !selectedProviders[provider] {
+			return model.Plan{}, fmt.Errorf("CI agent secret environment does not match a selected provider: %s", provider)
+		}
+	}
+	for provider := range answers.AgentControlPlanes {
+		if !selectedProviders[provider] {
+			return model.Plan{}, fmt.Errorf("CI agent control plane does not match a selected provider: %s", provider)
+		}
+	}
 	recommended := Recommend(resolvedScan, answers)
 	applied := requested
 	if requested == model.ProfileAuto {
@@ -68,6 +93,24 @@ func Create(scan model.ScanResult, requested model.Profile, answers model.Answer
 			unresolved = append(unresolved, "production_environment")
 		}
 	}
+	workflowRequired := profileRank(applied) >= profileRank(model.ProfileProduction)
+	workflowQuestions := missingWorkflowAnswers(answers.Workflow, workflowRequired || (answers.Workflow != nil && answers.Workflow.Enabled), workflowRequired)
+	unresolved = append(unresolved, workflowQuestions...)
+	if len(workflowQuestions) == 0 && answers.Workflow != nil && answers.Workflow.Enabled {
+		if err := config.ValidateWorkflow(answers.Workflow, workflowRequired); err != nil {
+			return model.Plan{}, fmt.Errorf("workflow: %w", err)
+		}
+	}
+	trustedCommandQuestions := []string{}
+	if answers.AllowCIChanges != nil && *answers.AllowCIChanges {
+		trustedCommandQuestions = missingTrustedCommandAnswers(answers.Workflow, answers.CISecretBindings)
+		unresolved = append(unresolved, trustedCommandQuestions...)
+		if len(workflowQuestions) == 0 && len(trustedCommandQuestions) == 0 && answers.Workflow != nil && answers.Workflow.Enabled {
+			if err := config.ValidateCITrustedCommandBoundaries(answers.Workflow, answers.CISecretBindings); err != nil {
+				return model.Plan{}, fmt.Errorf("trusted command boundary: %w", err)
+			}
+		}
+	}
 	if applied == model.ProfileRegulated && len(answers.Approvers) < 2 {
 		unresolved = append(unresolved, "separated_approvers")
 	}
@@ -77,6 +120,13 @@ func Create(scan model.ScanResult, requested model.Profile, answers model.Answer
 	if !allowsWrite(answers.AllowedActions) {
 		unresolved = append(unresolved, "authority:write_repository")
 	}
+	if answers.Workflow != nil && answers.Workflow.Correction.OpenChangeRequest {
+		for _, action := range []string{"network", "commit", "push"} {
+			if !allowsAction(answers.AllowedActions, action) {
+				unresolved = append(unresolved, "authority:"+action)
+			}
+		}
+	}
 	if answers.AllowCIChanges != nil && *answers.AllowCIChanges && hasNonGoStack(resolvedScan.Stacks) {
 		for _, provider := range resolvedScan.CIProviders {
 			if len(answers.CISetupCommands[provider]) == 0 && strings.TrimSpace(answers.CISetupWaivers[provider]) == "" {
@@ -84,6 +134,25 @@ func Create(scan model.ScanResult, requested model.Profile, answers model.Answer
 			}
 			if provider == "gitlab" && strings.TrimSpace(answers.GitLabImage) == "" {
 				unresolved = append(unresolved, "gitlab_image")
+			}
+		}
+	}
+	if workflowRequired && answers.AllowCIChanges != nil && *answers.AllowCIChanges && answers.Workflow != nil && answers.Workflow.Enabled {
+		for _, provider := range resolvedScan.CIProviders {
+			if !config.CISecretDecisionComplete(answers.CISecretBindings[provider], answers.CISecretWaivers[provider], answers.Workflow.Correction.Enabled) {
+				unresolved = append(unresolved, "ci_secrets:"+provider)
+			}
+		}
+	}
+	if workflowRequired && answers.AllowCIChanges != nil && *answers.AllowCIChanges {
+		for _, provider := range resolvedScan.CIProviders {
+			if len(answers.CISecretBindings[provider]) > 0 && strings.TrimSpace(answers.AgentSecretEnvironments[provider]) == "" {
+				unresolved = append(unresolved, "ci_agent_secret_environment:"+provider)
+			}
+			if config.CIProviderAgentSecretsBound(answers.CISecretBindings[provider]) {
+				if _, ok := answers.AgentControlPlanes[provider]; !ok {
+					unresolved = append(unresolved, "ci_agent_control_plane:"+provider)
+				}
 			}
 		}
 	}
@@ -298,7 +367,190 @@ func validateAnswers(answers model.Answers) error {
 			return fmt.Errorf("invalid CI setup waiver for %q", provider)
 		}
 	}
+	if err := config.ValidateCISecretBindings(answers.CISecretBindings, answers.CISecretWaivers); err != nil {
+		return fmt.Errorf("CI secret bindings: %w", err)
+	}
+	if err := config.ValidateCIAgentSecretEnvironments(answers.AgentSecretEnvironments); err != nil {
+		return fmt.Errorf("CI agent secret environments: %w", err)
+	}
+	if err := config.ValidateCIAgentControlPlanes(answers.AgentControlPlanes); err != nil {
+		return fmt.Errorf("CI agent control planes: %w", err)
+	}
 	return nil
+}
+
+func missingWorkflowAnswers(workflow *model.WorkflowConfig, required, requireCorrection bool) []string {
+	if !required {
+		return nil
+	}
+	if workflow == nil {
+		missing := []string{
+			"workflow.enabled",
+		}
+		for _, category := range model.StaticGuardCategories {
+			missing = append(missing, "workflow.static_guards."+category)
+		}
+		for _, category := range model.TestGuardCategories {
+			missing = append(missing, "workflow.test_guards."+category)
+		}
+		return append(missing,
+			"workflow.reviewers.architecture",
+			"workflow.reviewers.architecture.filesystem_read_only",
+			"workflow.reviewers.security",
+			"workflow.reviewers.security.filesystem_read_only",
+			"workflow.reviewers.correctness",
+			"workflow.reviewers.correctness.filesystem_read_only",
+			"workflow.reviewers.test_quality",
+			"workflow.reviewers.test_quality.filesystem_read_only",
+			"workflow.reviewers.business_rules",
+			"workflow.reviewers.business_rules.filesystem_read_only",
+			"workflow.reviewers.simplicity",
+			"workflow.reviewers.simplicity.filesystem_read_only",
+			"workflow.correction",
+			"workflow.correction.filesystem_sandboxed",
+			"workflow.artifact.build",
+			"workflow.artifact.path",
+			"workflow.artifact.sbom",
+			"workflow.artifact.sbom_path",
+			"workflow.artifact.provenance",
+			"workflow.artifact.provenance_path",
+			"workflow.deployment.staging",
+			"workflow.deployment.production",
+			"workflow.deployment.rollback",
+			"workflow.deployment.health_checks",
+			"workflow.deployment.observation_checks",
+			"workflow.deployment.canary_percentages",
+			"workflow.migration",
+			"workflow.release_schedule.cron",
+			"workflow.release_schedule.timezone",
+		)
+	}
+	var missing []string
+	if !workflow.Enabled {
+		missing = append(missing, "workflow.enabled")
+	}
+	for _, category := range missingGuardCategories(workflow.StaticGuards, model.StaticGuardCategories) {
+		missing = append(missing, "workflow.static_guards."+category)
+	}
+	for _, category := range missingGuardCategories(workflow.TestGuards, model.TestGuardCategories) {
+		missing = append(missing, "workflow.test_guards."+category)
+	}
+	roles := make(map[model.ReviewerRole]bool, len(workflow.Reviewers))
+	readOnlyRoles := make(map[model.ReviewerRole]bool, len(workflow.Reviewers))
+	for _, reviewer := range workflow.Reviewers {
+		if reviewer.Role.Valid() && len(reviewer.Command) > 0 && reviewer.TimeoutSeconds > 0 {
+			roles[reviewer.Role] = true
+		}
+		if reviewer.Role.Valid() && reviewer.FilesystemReadOnly {
+			readOnlyRoles[reviewer.Role] = true
+		}
+	}
+	for _, role := range model.ReviewerRoles {
+		if !roles[role] {
+			missing = append(missing, "workflow.reviewers."+string(role))
+		}
+		if !readOnlyRoles[role] {
+			missing = append(missing, "workflow.reviewers."+string(role)+".filesystem_read_only")
+		}
+	}
+	if (requireCorrection && !workflow.Correction.Enabled) || (workflow.Correction.Enabled && (len(workflow.Correction.Command) == 0 || workflow.Correction.MaxAttempts <= 0 || workflow.Correction.MaxChangedFiles <= 0 || workflow.Correction.MaxChangedLines <= 0 || strings.TrimSpace(workflow.Correction.BranchPrefix) == "")) {
+		missing = append(missing, "workflow.correction")
+	}
+	if workflow.Correction.Enabled && !workflow.Correction.FilesystemSandboxed {
+		missing = append(missing, "workflow.correction.filesystem_sandboxed")
+	}
+	if commandSpecMissing(workflow.Artifact.Build) {
+		missing = append(missing, "workflow.artifact.build")
+	}
+	if strings.TrimSpace(workflow.Artifact.ArtifactPath) == "" {
+		missing = append(missing, "workflow.artifact.path")
+	}
+	if commandSpecMissing(workflow.Artifact.SBOM) {
+		missing = append(missing, "workflow.artifact.sbom")
+	}
+	if strings.TrimSpace(workflow.Artifact.SBOMPath) == "" {
+		missing = append(missing, "workflow.artifact.sbom_path")
+	}
+	if commandSpecMissing(workflow.Artifact.Provenance) {
+		missing = append(missing, "workflow.artifact.provenance")
+	}
+	if strings.TrimSpace(workflow.Artifact.ProvenancePath) == "" {
+		missing = append(missing, "workflow.artifact.provenance_path")
+	}
+	if commandSpecMissing(workflow.Deployment.Staging) {
+		missing = append(missing, "workflow.deployment.staging")
+	}
+	if commandSpecMissing(workflow.Deployment.Production) {
+		missing = append(missing, "workflow.deployment.production")
+	}
+	if commandSpecMissing(workflow.Deployment.Rollback) {
+		missing = append(missing, "workflow.deployment.rollback")
+	}
+	if commandSpecsMissing(workflow.Deployment.HealthChecks) {
+		missing = append(missing, "workflow.deployment.health_checks")
+	}
+	if commandSpecsMissing(workflow.Deployment.ObservationChecks) {
+		missing = append(missing, "workflow.deployment.observation_checks")
+	}
+	if len(workflow.Deployment.CanaryPercentages) == 0 {
+		missing = append(missing, "workflow.deployment.canary_percentages")
+	}
+	if commandSpecsMissing(workflow.Migration) {
+		missing = append(missing, "workflow.migration")
+	}
+	if strings.TrimSpace(workflow.ReleaseSchedule.Cron) == "" {
+		missing = append(missing, "workflow.release_schedule.cron")
+	}
+	if strings.TrimSpace(workflow.ReleaseSchedule.Timezone) == "" {
+		missing = append(missing, "workflow.release_schedule.timezone")
+	}
+	return missing
+}
+
+func missingTrustedCommandAnswers(workflow *model.WorkflowConfig, bindings map[string][]model.CISecretBinding) []string {
+	if workflow == nil || !workflow.Enabled {
+		return nil
+	}
+	missing := []string{}
+	if config.CISecretScopeBound(bindings, model.CISecretScopeReview) {
+		for _, reviewer := range workflow.Reviewers {
+			if !reviewer.TrustedExternalCommand {
+				missing = append(missing, "workflow.reviewers."+string(reviewer.Role)+".trusted_external_command")
+			}
+		}
+	}
+	if workflow.Correction.Enabled && config.CISecretScopeBound(bindings, model.CISecretScopeRepair) && !workflow.Correction.TrustedExternalCommand {
+		missing = append(missing, "workflow.correction.trusted_external_command")
+	}
+	return missing
+}
+
+func missingGuardCategories(guards model.GuardSet, categories []string) []string {
+	var missing []string
+	for _, category := range categories {
+		command, hasCommand := guards.Commands[category]
+		waiver, hasWaiver := guards.Waivers[category]
+		if hasCommand == hasWaiver || (hasCommand && commandSpecMissing(command)) || (hasWaiver && strings.TrimSpace(waiver) == "") {
+			missing = append(missing, category)
+		}
+	}
+	return missing
+}
+
+func commandSpecsMissing(commands []model.CommandSpec) bool {
+	if len(commands) == 0 {
+		return true
+	}
+	for _, command := range commands {
+		if commandSpecMissing(command) {
+			return true
+		}
+	}
+	return false
+}
+
+func commandSpecMissing(command model.CommandSpec) bool {
+	return strings.TrimSpace(command.Name) == "" || strings.TrimSpace(command.Workdir) == "" || len(command.Command) == 0 || !command.Required || command.TimeoutSeconds <= 0
 }
 
 func safeRelative(path string) bool {
@@ -374,11 +626,15 @@ func boolValue(value *bool) bool {
 }
 
 func allowsWrite(actions *[]string) bool {
+	return allowsAction(actions, "write_repository")
+}
+
+func allowsAction(actions *[]string, target string) bool {
 	if actions == nil {
 		return false
 	}
 	for _, action := range *actions {
-		if action == "write_repository" {
+		if action == target {
 			return true
 		}
 	}

@@ -1,8 +1,8 @@
 interface:
   display_name: "Sam Harness"
-  short_description: "Apply a production-grade AI development harness"
+  short_description: "Adopt and operate an executable development harness"
   brand_color: "#0A2A4A"
-  default_prompt: "Use $sam-harness to inspect this repository, propose the appropriate controls, and apply them only after I approve the plan."
+  default_prompt: "Use $sam-harness to adopt or operate this repository's harness, preserve every authority boundary, and report only receipt-backed states."
 
 policy:
   allow_implicit_invocation: true
