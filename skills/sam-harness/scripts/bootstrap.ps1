@@ -20,13 +20,12 @@ $SamHarnessTempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("sam-harness-i
 New-Item -ItemType Directory -Path $SamHarnessTempDir | Out-Null
 
 try {
-    foreach ($SamHarnessAsset in @($SamHarnessArchive, "checksums.txt", "checksums.txt.sig", "checksums.txt.pem")) {
+    foreach ($SamHarnessAsset in @($SamHarnessArchive, "checksums.txt", "checksums.txt.bundle")) {
         Invoke-WebRequest -Uri "${SamHarnessBaseUrl}/${SamHarnessAsset}" -OutFile (Join-Path $SamHarnessTempDir $SamHarnessAsset)
     }
 
     & cosign verify-blob `
-        --certificate (Join-Path $SamHarnessTempDir "checksums.txt.pem") `
-        --signature (Join-Path $SamHarnessTempDir "checksums.txt.sig") `
+        --bundle (Join-Path $SamHarnessTempDir "checksums.txt.bundle") `
         --certificate-identity-regexp '^https://github.com/samuelfaj/sam-harness/.github/workflows/release.yml@refs/tags/v' `
         --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' `
         (Join-Path $SamHarnessTempDir "checksums.txt")

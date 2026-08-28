@@ -12,4 +12,4 @@ Include the affected version, operating system, repository shape, exact command,
 
 ## Release verification
 
-Each release publishes `checksums.txt`, a keyless Cosign signature and certificate for that file, CycloneDX SBOMs, and GitHub build provenance. The bootstrap scripts refuse installation when signature or checksum verification fails.
+Each release publishes `checksums.txt`, a keyless Cosign bundle containing the signature and certificate for that file, CycloneDX SBOMs, and GitHub build provenance. The bootstrap scripts refuse installation when signature or checksum verification fails.

@@ -28,7 +28,7 @@ Use $sam-harness and apply the harness to this repository.
 /sam-harness apply
 ```
 
-The skill asks before downloading the CLI. Its bootstrap scripts require Cosign and verify the release certificate and checksum before installing the binary in the user cache.
+The skill asks before downloading the CLI. Its bootstrap scripts require Cosign and verify the signed release bundle and checksum before installing the binary in the user cache.
 
 ## What happens
 
@@ -84,7 +84,7 @@ The [book traceability matrix](docs/book-traceability.md) maps all 20 chapters t
 
 ## Security
 
-Read [SECURITY.md](SECURITY.md) before reporting a vulnerability. Release archives include checksums, a keyless Cosign signature for the checksum file, CycloneDX SBOMs, and GitHub build provenance.
+Read [SECURITY.md](SECURITY.md) before reporting a vulnerability. Release archives include checksums, a keyless Cosign bundle for the checksum file, CycloneDX SBOMs, and GitHub build provenance.
 
 ## License
 
