@@ -1,42 +1,50 @@
 ---
 name: sam-harness
-description: Inspect a software repository, ask for the risk and authority facts that cannot be discovered, propose a development harness, and apply it only after approval. Use when the user asks to apply, adopt, instalar, aplicar, configurar, or auditar sam-harness in a repository, including "Aplique o sam-harness aqui", "Apply sam-harness here", and "Aplica sam-harness aquí".
+description: Adopt, operate, repair, audit, or upgrade the executable Sam Harness in a software repository. Use for equivalent English, Portuguese, or Spanish requests such as "Apply sam-harness here", "Aplique o sam-harness aqui", or "Aplica sam-harness aquí".
 ---
 
 # Sam Harness
 
-Turn the repository's real commands, architecture, delivery path, and risk into durable agent instructions and deterministic gates.
+Turn the repository's real commands, architecture, delivery path, and risk into durable agent instructions, executable lifecycle phases, and evidence receipts.
 
 ## Operating contract
 
 - Treat the repository and explicit user statements as the source of truth. Do not infer authorization from available tools.
-- Preserve unrelated work. `scan` and `plan` must not change tracked files.
-- Separate source, local checks, commit, remote, review, CI, artifact, deployment, and live proof.
+- Preserve unrelated work. `scan` and `plan` do not edit tracked source files. `pipeline` orchestrates configured commands and receipts rather than editing source itself, but its subprocesses may affect the repository or external systems.
+- Sam Harness fingerprints the repository around `static` and `test` and blocks either phase if its commands mutate the repository. This is mutation detection, not an external-effect sandbox.
+- Treat `filesystem_read_only` and `filesystem_sandboxed` as user attestations about the configured executable. Verify its actual flags and environment; Sam Harness does not turn arbitrary argv into an OS sandbox.
+- `repair` requires enabled correction plus `write_repository` and `network` authority. It accepts only a current failed `static`, `test`, `review`, or `artifact` receipt, runs the correction in an isolated Git sandbox, and applies only a budget-compliant delta that passes fresh `static` and `test` checks.
+- Separate source, local checks, commit, remote, review, CI, artifact, staging, production, observation, and rollback proof.
 - Never apply a plan until the user approves its exact plan ID.
 - Treat every plan as short-lived. If it expires, scan again and obtain approval for the new ID.
-- Never commit, push, release, deploy, alter credentials, or perform an irreversible action unless the user grants that exact authority.
+- Never commit, push, open a change request, release, deploy, alter credentials, or perform an irreversible action unless the user grants that exact authority.
+- Require `network` authority for review and repair; staging, migration, and observation also require `deploy`. Production and rollback require `network`, `deploy`, and `release`.
 - If the repository changes after planning, discard the stale plan and create another one.
+- A configured command is not permission to execute it. Ask at the next authority boundary, even when the command is present in `.sam-harness/config.yaml`.
+- Treat each user-approved external command as the execution boundary. Do not infer that Sam Harness can constrain provider-side effects beyond the configured argv and authority checks.
+- Treat repair patches and receipts as untrusted data. Only the generated, separately authorized publisher may verify and publish the exact pair; repair credentials never cross into that publisher.
+- Treat review as a pre-merge base-to-head gate. Require an absolute `--review-base` and exact `--review-base-sha`/`--review-head-sha` for provider-bound proof; preserve both SHAs and fingerprints plus the canonical patch SHA-256. A head-only local review does not satisfy it.
+- Keep provider-bound review and repair secrets only in the protected agent environment named by answers field `agent_secret_environments`, installed as `ci.agent_secret_environments`. Require the matching `agent_control_planes`/`ci.agent_control_planes` entry, human approval, provider protection, and remote readback. Missing secret, check, current-head identity, released runtime, or trusted base blocks—never skip the gate.
+- Keep ordinary GitHub PR/merge-group and GitLab MR jobs free of bound agent secrets. GitHub uses a default-branch-owned agents workflow and a dedicated App to publish the required check on the revalidated head. Pull requests enter through `pull_request_target`; merge queues require an external App/webhook to send `repository_dispatch` type `sam_harness_merge_group_review` with the exact provider head, current default-branch base, and queue ref. Never put direct `merge_group` in the secret-bearing workflow. GitLab requires its configured external control plane/status; do not claim a complete in-repository secret loop. Credential-free review or correction remains local when only the other scope is bound.
+- For secret-bearing CI, require the trusted released v0.2 runtime, `--config` outside the target, and `trusted_external_command: true` for every secret-bound reviewer or correction. Use `trusted_config_arguments` only for unique zero-based argv indices greater than zero whose safe helper files resolve from the trusted config directory. Local and waiver-only no-secret commands may remain repository-relative.
+- Missing base configuration or a target-controlled executable/helper blocks. The Sam Harness self workflow cannot bootstrap this trust from an untrusted change; establish its release and base configuration through an approved trusted path before enabling secrets.
 
-## Workflow
+## Route the request
 
-1. Read [references/adoption.md](references/adoption.md).
-2. Locate the repository root and check whether the `sam-harness` binary is available.
-3. If the binary is absent, ask before downloading it. After approval, use the platform bootstrap in `scripts/`; it verifies the release signature and checksum.
-4. Run `sam-harness scan <root> --format json`.
-5. Ask only for unresolved decisions. Keep answers in a temporary JSON file outside the repository.
-6. Read the conditional references that affect this repository:
-   - [references/profiles.md](references/profiles.md) for the recommended maturity profile.
-   - [references/stacks.md](references/stacks.md) for each detected stack.
-   - [references/design-and-human-finish.md](references/design-and-human-finish.md) when a user-facing surface exists.
-   - [references/enterprise.md](references/enterprise.md) for production, regulated, multi-service, data-migration, provider, or retirement work.
-7. Run `sam-harness plan <root> --profile auto --answers <temporary-file>`.
-8. Show the profile rationale, unresolved risk, exact operations, and plan ID. Wait for explicit approval of that ID.
-9. Apply with `sam-harness apply --plan <plan-file> --accept <plan-id>`.
-10. Run `sam-harness doctor <root>` and `sam-harness check <root>`.
-11. Report what changed and the proof state reached. Do not imply remote, CI, release, deployment, or live success without its own receipt.
+- To install or change the harness, read [references/adoption.md](references/adoption.md). It covers discovery, decisions, planning, approval, application, and structural validation.
+- To run a configured phase, the full lifecycle, or bounded correction, read [references/lifecycle.md](references/lifecycle.md).
+- When an installed repository contains local lifecycle skills, nested workspace instructions, or review templates, read [references/installed-agent-system.md](references/installed-agent-system.md) before selecting context or preparing a review.
+- To audit evidence or cross a remote, release, deployment, migration, security-sensitive, or delegated boundary, read [references/evidence-and-authority.md](references/evidence-and-authority.md).
+- For profile selection, detected stack gates, user-facing work, or enterprise controls, read only the relevant reference: [profiles](references/profiles.md), [stacks](references/stacks.md), [design and human finish](references/design-and-human-finish.md), or [enterprise](references/enterprise.md).
 
-Read [references/evidence-and-authority.md](references/evidence-and-authority.md) before any remote, release, deployment, migration, security-sensitive, or delegated operation.
+## Equivalent invocations
+
+- English: `Use $sam-harness to apply the harness here.` or `Run the review phase with sam-harness.`
+- Português: `Use $sam-harness para aplicar o harness aqui.` or `Execute a fase de review com sam-harness.`
+- Español: `Usa $sam-harness para aplicar el harness aquí.` or `Ejecuta la fase de review con sam-harness.`
+
+Follow the same discovery, approval, execution, and evidence boundaries in every language.
 
 ## Stop conditions
 
-Stop and ask when a required command is ambiguous, an existing managed file cannot be merged safely, the plan has unresolved decisions, the plan fingerprint is stale, a gate fails, or the next action crosses configured authority.
+Stop and ask when a required command is missing or ambiguous, an existing managed file cannot be merged safely, the plan has unresolved decisions, the plan fingerprint is stale, required pre-merge base/SHA identity is missing, a protected agent environment or control-plane readback is missing, a required secret or provider check is unavailable, a required phase blocks, a receipt is missing or malformed, repair reaches a budget, or the next action crosses configured authority.

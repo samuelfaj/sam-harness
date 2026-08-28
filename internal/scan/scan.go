@@ -83,7 +83,7 @@ func Run(path string) (model.ScanResult, error) {
 		}
 		switch entry.Name() {
 		case "package.json":
-			stack, err := detectPackageJSON(path, dir)
+			stack, err := detectPackageJSON(path, dir, root)
 			if err != nil {
 				return err
 			}
@@ -130,7 +130,7 @@ type packageJSON struct {
 	PackageManager  string            `json:"packageManager"`
 }
 
-func detectPackageJSON(path, dir string) (model.Stack, error) {
+func detectPackageJSON(path, dir, root string) (model.Stack, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return model.Stack{}, err
@@ -141,7 +141,7 @@ func detectPackageJSON(path, dir string) (model.Stack, error) {
 	}
 	manager := strings.Split(pkg.PackageManager, "@")[0]
 	if manager == "" {
-		manager = detectPackageManager(filepath.Dir(path))
+		manager = detectPackageManager(filepath.Dir(path), root)
 	}
 	if !supportedPackageManager(manager) {
 		manager = ""
@@ -204,8 +204,9 @@ func detectRust(path, dir string) model.Stack {
 	}, Persistence: containsTextAny(text, "diesel", "sqlx", "sea-orm", "rusqlite")}
 }
 
-func detectPackageManager(dir string) string {
-	for current := dir; ; current = filepath.Dir(current) {
+func detectPackageManager(dir, root string) string {
+	root = filepath.Clean(root)
+	for current := filepath.Clean(dir); ; current = filepath.Dir(current) {
 		var found []string
 		for _, candidate := range []struct {
 			name  string
@@ -229,12 +230,20 @@ func detectPackageManager(dir string) string {
 		if len(found) > 1 {
 			return ""
 		}
+		if current == root {
+			break
+		}
 		parent := filepath.Dir(current)
-		if parent == current {
+		if parent == current || !pathWithinRoot(root, parent) {
 			break
 		}
 	}
-	return "npm"
+	return ""
+}
+
+func pathWithinRoot(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func supportedPackageManager(value string) bool {

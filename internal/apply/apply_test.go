@@ -185,7 +185,58 @@ func productionAnswers() model.Answers {
 	answers.ObservationWindow = "until release verification completes"
 	answers.RollbackOwner = "owner"
 	answers.ProductionEnvironment = "release"
+	answers.Workflow = productionWorkflow()
 	return answers
+}
+
+func productionWorkflow() *model.WorkflowConfig {
+	reviewers := make([]model.ReviewerConfig, 0, len(model.ReviewerRoles))
+	for _, role := range model.ReviewerRoles {
+		reviewers = append(reviewers, model.ReviewerConfig{Role: role, Command: []string{"review-agent"}, TimeoutSeconds: 60, FilesystemReadOnly: true})
+	}
+	command := func(name string) model.CommandSpec {
+		return model.CommandSpec{Name: name, Workdir: ".", Command: []string{"fixture", name}, Required: true, TimeoutSeconds: 60}
+	}
+	guardWaivers := func(categories []string) model.GuardSet {
+		waivers := make(map[string]string, len(categories))
+		for _, category := range categories {
+			waivers[category] = "not applicable to the idempotent renderer fixture"
+		}
+		return model.GuardSet{Commands: map[string]model.CommandSpec{}, Waivers: waivers}
+	}
+	return &model.WorkflowConfig{
+		Enabled:      true,
+		StaticGuards: guardWaivers(model.StaticGuardCategories),
+		TestGuards:   guardWaivers(model.TestGuardCategories),
+		Reviewers:    reviewers,
+		Correction: model.CorrectionConfig{
+			Enabled:             true,
+			Command:             []string{"repair-agent"},
+			MaxAttempts:         1,
+			MaxChangedFiles:     1,
+			MaxChangedLines:     1,
+			BranchPrefix:        "sam-harness/fix-",
+			FilesystemSandboxed: true,
+		},
+		Artifact: model.ArtifactWorkflow{
+			Build:          command("build"),
+			ArtifactPath:   "dist/app",
+			SBOM:           command("sbom"),
+			SBOMPath:       "dist/sbom.json",
+			Provenance:     command("provenance"),
+			ProvenancePath: "dist/provenance.json",
+		},
+		Deployment: model.DeploymentWorkflow{
+			Staging:           command("staging"),
+			Production:        command("production"),
+			Rollback:          command("rollback"),
+			HealthChecks:      []model.CommandSpec{command("health")},
+			ObservationChecks: []model.CommandSpec{command("observe")},
+			CanaryPercentages: []int{10, 100},
+		},
+		Migration:       []model.CommandSpec{command("migration")},
+		ReleaseSchedule: model.ReleaseSchedule{Cron: "0 12 * * 3", Timezone: "UTC"},
+	}
 }
 
 func newGitRepository(t *testing.T) string {

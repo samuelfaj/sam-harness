@@ -15,6 +15,7 @@ import (
 	"github.com/samuelfaj/sam-harness/internal/config"
 	"github.com/samuelfaj/sam-harness/internal/doctor"
 	"github.com/samuelfaj/sam-harness/internal/model"
+	pipelinerun "github.com/samuelfaj/sam-harness/internal/pipeline"
 	"github.com/samuelfaj/sam-harness/internal/planner"
 	"github.com/samuelfaj/sam-harness/internal/scan"
 )
@@ -42,6 +43,10 @@ func (c *CLI) Run(args []string) error {
 		return c.apply(args[1:])
 	case "check":
 		return c.check(args[1:])
+	case "pipeline":
+		return c.pipeline(args[1:])
+	case "repair":
+		return c.repair(args[1:])
 	case "doctor":
 		return c.doctor(args[1:])
 	case "upgrade":
@@ -165,7 +170,10 @@ func (c *CLI) check(args []string) error {
 	if err != nil {
 		return err
 	}
-	writeReceipt := options.value("receipt", "true") != "false"
+	writeReceipt, err := boolOption(options, "receipt", true)
+	if err != nil {
+		return err
+	}
 	report, receipt, runErr := checkrun.Run(options.path(), writeReceipt)
 	if options.value("format", "human") == "json" {
 		if err := writeJSON(c.Stdout, struct {
@@ -177,7 +185,9 @@ func (c *CLI) check(args []string) error {
 	} else {
 		for _, result := range report.Results {
 			status := "PASS"
-			if !result.Passed {
+			if result.Skipped {
+				status = "SKIP"
+			} else if !result.Passed {
 				status = "FAIL"
 			}
 			fmt.Fprintf(c.Stdout, "%s %s (%s)\n", status, result.Name, result.Duration)
@@ -190,6 +200,113 @@ func (c *CLI) check(args []string) error {
 		}
 	}
 	return runErr
+}
+
+func (c *CLI) pipeline(args []string) error {
+	options, err := parseOptions(args, map[string]bool{"config": true, "format": true, "phase": true, "receipt": true, "review-base": true, "review-base-sha": true, "review-head-sha": true})
+	if err != nil {
+		return err
+	}
+	phase := model.Phase(options.values["phase"])
+	if !phase.Valid() {
+		return errors.New("--phase must be one of static, test, review, artifact, staging, production, observe, rollback, migration, or all")
+	}
+	writeReceipt, err := boolOption(options, "receipt", true)
+	if err != nil {
+		return err
+	}
+	report, receipt, runErr := pipelinerun.RunWithOptions(options.path(), phase, writeReceipt, pipelinerun.RunOptions{
+		ConfigPath:    options.values["config"],
+		ReviewBase:    options.values["review-base"],
+		ReviewBaseSHA: options.values["review-base-sha"],
+		ReviewHeadSHA: options.values["review-head-sha"],
+	})
+	if options.value("format", "human") == "json" {
+		if err := writeJSON(c.Stdout, struct {
+			Receipt string              `json:"receipt,omitempty"`
+			Report  pipelinerun.Receipt `json:"report"`
+		}{Receipt: receipt, Report: report}); err != nil {
+			return err
+		}
+	} else {
+		writePipelineReport(c.Stdout, report, receipt)
+	}
+	return runErr
+}
+
+func (c *CLI) repair(args []string) error {
+	options, err := parseOptions(args, map[string]bool{"config": true, "format": true, "receipt": true, "receipt-output": true})
+	if err != nil {
+		return err
+	}
+	failedReceipt := options.values["receipt"]
+	if failedReceipt == "" {
+		return errors.New("--receipt is required")
+	}
+	writeReceipt, err := boolOption(options, "receipt-output", true)
+	if err != nil {
+		return err
+	}
+	report, receipt, runErr := pipelinerun.RepairWithConfig(options.path(), options.values["config"], failedReceipt, writeReceipt)
+	if options.value("format", "human") == "json" {
+		if err := writeJSON(c.Stdout, struct {
+			Receipt string              `json:"receipt,omitempty"`
+			Report  pipelinerun.Receipt `json:"report"`
+		}{Receipt: receipt, Report: report}); err != nil {
+			return err
+		}
+	} else {
+		writePipelineReport(c.Stdout, report, receipt)
+	}
+	return runErr
+}
+
+func writePipelineReport(writer io.Writer, report pipelinerun.Receipt, receipt string) {
+	status := strings.ToUpper(string(report.Status))
+	if status == "" {
+		status = "FAILED"
+	}
+	label := string(report.Phase)
+	if label == "" {
+		label = report.Kind
+	}
+	fmt.Fprintf(writer, "%s %s\n", status, label)
+	for _, result := range report.Commands {
+		commandStatus := "PASS"
+		if result.Skipped {
+			commandStatus = "SKIP"
+		} else if !result.Passed {
+			commandStatus = "FAIL"
+		}
+		fmt.Fprintf(writer, "%s %s (%s)\n", commandStatus, result.Name, result.Duration)
+		if !result.Passed && result.Output != "" {
+			fmt.Fprintln(writer, strings.TrimSpace(result.Output))
+		}
+	}
+	for _, finding := range report.Findings {
+		fmt.Fprintf(writer, "%s %s: %s\n", finding.Severity, finding.Role, finding.Summary)
+	}
+	if report.Artifact != nil {
+		fmt.Fprintf(writer, "Artifact: %s sha256:%s\n", report.Artifact.Path, report.Artifact.SHA256)
+	}
+	if receipt != "" {
+		fmt.Fprintf(writer, "Receipt: %s\n", receipt)
+	}
+}
+
+func boolOption(options parsedOptions, key string, fallback bool) (bool, error) {
+	value := options.values[key]
+	if value == "" {
+		return fallback, nil
+	}
+	switch value {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("--%s must be true or false", key)
+	}
 }
 
 func (c *CLI) doctor(args []string) error {
@@ -223,7 +340,7 @@ func (c *CLI) doctor(args []string) error {
 }
 
 func (c *CLI) upgrade(args []string) error {
-	options, err := parseOptions(args, map[string]bool{"to": true, "output": true, "format": true})
+	options, err := parseOptions(args, map[string]bool{"to": true, "output": true, "format": true, "answers": true})
 	if err != nil {
 		return err
 	}
@@ -243,6 +360,11 @@ func (c *CLI) upgrade(args []string) error {
 		return err
 	}
 	answers := answersFromConfig(cfg)
+	providedAnswers, err := planner.LoadAnswers(options.values["answers"])
+	if err != nil {
+		return err
+	}
+	answers = mergeAnswers(answers, providedAnswers)
 	plan, err := planner.Create(result, cfg.Profile, answers)
 	if err != nil {
 		return err
@@ -258,6 +380,14 @@ func (c *CLI) upgrade(args []string) error {
 		}{PlanFile: path, Plan: plan})
 	}
 	fmt.Fprintf(c.Stdout, "Upgrade plan ID: %s\nPlan file: %s\n", plan.ID, path)
+	if len(plan.Unresolved) > 0 {
+		fmt.Fprintln(c.Stdout, "Unresolved decisions:")
+		for _, item := range plan.Unresolved {
+			fmt.Fprintf(c.Stdout, "  - %s\n", item)
+		}
+		fmt.Fprintln(c.Stdout, "No repository files were planned. Collect answers and run upgrade again.")
+		return nil
+	}
 	for _, operation := range plan.Operations {
 		fmt.Fprintf(c.Stdout, "  - %s %s\n", operation.Action, operation.Path)
 	}
@@ -355,26 +485,153 @@ func answersFromConfig(cfg model.Config) model.Answers {
 		}
 	}
 	return model.Answers{
-		Criticality:           cfg.Governance.Criticality,
-		DataSensitivity:       cfg.Governance.DataSensitivity,
-		DeploysToProduction:   &production,
-		PersistentData:        &cfg.Migration.Required,
-		IrreversibleActions:   &irreversible,
-		DesignSourceOfTruth:   cfg.Design.SourceOfTruth,
-		Approvers:             append([]string(nil), cfg.Governance.Approvers...),
-		AllowCIChanges:        &allowCI,
-		CIProviders:           append([]string(nil), cfg.CI.Providers...),
-		AllowedActions:        &actions,
-		CommandOverrides:      commandOverrides,
-		CommandWaivers:        cloneStringMap(cfg.Governance.CommandWaivers),
-		CISetupCommands:       cloneSetupCommands(cfg.CI.SetupCommands),
-		CISetupWaivers:        cloneStringMap(cfg.CI.SetupWaivers),
-		GitLabImage:           cfg.CI.GitLabImage,
-		RiskAcceptance:        cfg.Governance.RiskAcceptance,
-		ObservationWindow:     cfg.Release.ObservationWindow,
-		RollbackOwner:         cfg.Release.RollbackOwner,
-		ProductionEnvironment: cfg.Release.ProductionEnvironment,
+		Criticality:             cfg.Governance.Criticality,
+		DataSensitivity:         cfg.Governance.DataSensitivity,
+		DeploysToProduction:     &production,
+		PersistentData:          &cfg.Migration.Required,
+		IrreversibleActions:     &irreversible,
+		DesignSourceOfTruth:     cfg.Design.SourceOfTruth,
+		Approvers:               append([]string(nil), cfg.Governance.Approvers...),
+		AllowCIChanges:          &allowCI,
+		CIProviders:             append([]string(nil), cfg.CI.Providers...),
+		AllowedActions:          &actions,
+		CommandOverrides:        commandOverrides,
+		CommandWaivers:          cloneStringMap(cfg.Governance.CommandWaivers),
+		CISetupCommands:         cloneSetupCommands(cfg.CI.SetupCommands),
+		CISetupWaivers:          cloneStringMap(cfg.CI.SetupWaivers),
+		CISecretBindings:        cloneCISecretBindings(cfg.CI.SecretBindings),
+		CISecretWaivers:         cloneStringMap(cfg.CI.SecretWaivers),
+		AgentSecretEnvironments: cloneStringMap(cfg.CI.AgentSecretEnvironments),
+		AgentControlPlanes:      cloneAgentControlPlanes(cfg.CI.AgentControlPlanes),
+		GitLabImage:             cfg.CI.GitLabImage,
+		RiskAcceptance:          cfg.Governance.RiskAcceptance,
+		ObservationWindow:       cfg.Release.ObservationWindow,
+		RollbackOwner:           cfg.Release.RollbackOwner,
+		ProductionEnvironment:   cfg.Release.ProductionEnvironment,
+		Workflow:                cloneWorkflow(cfg.Workflow),
 	}
+}
+
+func cloneWorkflow(workflow *model.WorkflowConfig) *model.WorkflowConfig {
+	if workflow == nil {
+		return nil
+	}
+	cloned := *workflow
+	cloned.StaticGuards = cloneGuardSet(workflow.StaticGuards)
+	cloned.TestGuards = cloneGuardSet(workflow.TestGuards)
+	cloned.Reviewers = append([]model.ReviewerConfig(nil), workflow.Reviewers...)
+	for index := range cloned.Reviewers {
+		cloned.Reviewers[index].Command = append([]string(nil), workflow.Reviewers[index].Command...)
+	}
+	cloned.Correction.Command = append([]string(nil), workflow.Correction.Command...)
+	cloned.Artifact.Build.Command = append([]string(nil), workflow.Artifact.Build.Command...)
+	cloned.Artifact.SBOM.Command = append([]string(nil), workflow.Artifact.SBOM.Command...)
+	cloned.Artifact.Provenance.Command = append([]string(nil), workflow.Artifact.Provenance.Command...)
+	cloned.Deployment.Staging.Command = append([]string(nil), workflow.Deployment.Staging.Command...)
+	cloned.Deployment.Production.Command = append([]string(nil), workflow.Deployment.Production.Command...)
+	cloned.Deployment.Rollback.Command = append([]string(nil), workflow.Deployment.Rollback.Command...)
+	cloned.Deployment.HealthChecks = cloneCommandSpecs(workflow.Deployment.HealthChecks)
+	cloned.Deployment.ObservationChecks = cloneCommandSpecs(workflow.Deployment.ObservationChecks)
+	cloned.Deployment.CanaryPercentages = append([]int(nil), workflow.Deployment.CanaryPercentages...)
+	cloned.Migration = cloneCommandSpecs(workflow.Migration)
+	return &cloned
+}
+
+func cloneGuardSet(guards model.GuardSet) model.GuardSet {
+	cloned := model.GuardSet{Commands: make(map[string]model.CommandSpec, len(guards.Commands)), Waivers: cloneStringMap(guards.Waivers)}
+	for category, command := range guards.Commands {
+		command.Command = append([]string(nil), command.Command...)
+		cloned.Commands[category] = command
+	}
+	if len(cloned.Commands) == 0 {
+		cloned.Commands = nil
+	}
+	return cloned
+}
+
+func cloneCommandSpecs(commands []model.CommandSpec) []model.CommandSpec {
+	cloned := append([]model.CommandSpec(nil), commands...)
+	for index := range cloned {
+		cloned[index].Command = append([]string(nil), commands[index].Command...)
+	}
+	return cloned
+}
+
+func mergeAnswers(base, provided model.Answers) model.Answers {
+	if provided.Criticality != "" {
+		base.Criticality = provided.Criticality
+	}
+	if provided.DataSensitivity != "" {
+		base.DataSensitivity = provided.DataSensitivity
+	}
+	if provided.DeploysToProduction != nil {
+		base.DeploysToProduction = provided.DeploysToProduction
+	}
+	if provided.PersistentData != nil {
+		base.PersistentData = provided.PersistentData
+	}
+	if provided.IrreversibleActions != nil {
+		base.IrreversibleActions = provided.IrreversibleActions
+	}
+	if provided.DesignSourceOfTruth != "" {
+		base.DesignSourceOfTruth = provided.DesignSourceOfTruth
+	}
+	if provided.Approvers != nil {
+		base.Approvers = append([]string(nil), provided.Approvers...)
+	}
+	if provided.AllowCIChanges != nil {
+		base.AllowCIChanges = provided.AllowCIChanges
+	}
+	if provided.CIProviders != nil {
+		base.CIProviders = append([]string(nil), provided.CIProviders...)
+	}
+	if provided.AllowedActions != nil {
+		actions := append([]string(nil), (*provided.AllowedActions)...)
+		base.AllowedActions = &actions
+	}
+	if provided.CommandOverrides != nil {
+		base.CommandOverrides = provided.CommandOverrides
+	}
+	if provided.CommandWaivers != nil {
+		base.CommandWaivers = provided.CommandWaivers
+	}
+	if provided.CISetupCommands != nil {
+		base.CISetupCommands = provided.CISetupCommands
+	}
+	if provided.CISetupWaivers != nil {
+		base.CISetupWaivers = provided.CISetupWaivers
+	}
+	if provided.CISecretBindings != nil {
+		base.CISecretBindings = cloneCISecretBindings(provided.CISecretBindings)
+	}
+	if provided.CISecretWaivers != nil {
+		base.CISecretWaivers = cloneStringMap(provided.CISecretWaivers)
+	}
+	if provided.AgentSecretEnvironments != nil {
+		base.AgentSecretEnvironments = cloneStringMap(provided.AgentSecretEnvironments)
+	}
+	if provided.AgentControlPlanes != nil {
+		base.AgentControlPlanes = cloneAgentControlPlanes(provided.AgentControlPlanes)
+	}
+	if provided.GitLabImage != "" {
+		base.GitLabImage = provided.GitLabImage
+	}
+	if provided.RiskAcceptance != "" {
+		base.RiskAcceptance = provided.RiskAcceptance
+	}
+	if provided.ObservationWindow != "" {
+		base.ObservationWindow = provided.ObservationWindow
+	}
+	if provided.RollbackOwner != "" {
+		base.RollbackOwner = provided.RollbackOwner
+	}
+	if provided.ProductionEnvironment != "" {
+		base.ProductionEnvironment = provided.ProductionEnvironment
+	}
+	if provided.Workflow != nil {
+		base.Workflow = cloneWorkflow(provided.Workflow)
+	}
+	return base
 }
 
 func cloneStringMap(values map[string]string) map[string]string {
@@ -384,6 +641,17 @@ func cloneStringMap(values map[string]string) map[string]string {
 	cloned := make(map[string]string, len(values))
 	for key, value := range values {
 		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneAgentControlPlanes(values map[string]model.AgentControlPlane) map[string]model.AgentControlPlane {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]model.AgentControlPlane, len(values))
+	for provider, controlPlane := range values {
+		cloned[provider] = controlPlane
 	}
 	return cloned
 }
@@ -404,6 +672,17 @@ func cloneSetupCommands(values map[string][]model.SetupCommand) map[string][]mod
 	return cloned
 }
 
+func cloneCISecretBindings(values map[string][]model.CISecretBinding) map[string][]model.CISecretBinding {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string][]model.CISecretBinding, len(values))
+	for provider, bindings := range values {
+		cloned[provider] = append([]model.CISecretBinding(nil), bindings...)
+	}
+	return cloned
+}
+
 func valueOr(value, fallback string) string {
 	if value == "" {
 		return fallback
@@ -419,9 +698,15 @@ Usage:
   sam-harness plan [path] [--profile auto|baseline|production|regulated] [--answers file] [--output file]
   sam-harness apply --plan file --accept plan-id [--format human|json]
   sam-harness check [path] [--format human|json] [--receipt true|false]
+  sam-harness pipeline [path] [--config absolute-or-contained-file] [--review-base absolute-directory --review-base-sha hex --review-head-sha hex] --phase static|test|review|artifact|staging|production|observe|rollback|migration|all [--receipt true|false]
+  sam-harness repair [path] [--config absolute-or-contained-file] --receipt file [--receipt-output true|false]
   sam-harness doctor [path] [--format human|json]
-  sam-harness upgrade [path] --to version [--output file]
-  sam-harness version`)
+  sam-harness upgrade [path] --to version [--answers file] [--output file]
+  sam-harness version
+
+For pipeline and repair, --config defaults to <path>/.sam-harness/config.yaml.
+An override must be an absolute regular file or a relative regular file contained by <path>.
+Secret-bearing review requires all three review-base flags; both SHAs are verified against Git HEAD before and after review.`)
 }
 
 func Main(args []string, stdout, stderr io.Writer) int {

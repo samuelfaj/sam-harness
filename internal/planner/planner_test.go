@@ -70,6 +70,528 @@ func TestCompletePlanUsesAnEmptyUnresolvedArray(t *testing.T) {
 	}
 }
 
+func TestBaselinePlanDoesNotRequireRemoteWorkflowControls(t *testing.T) {
+	t.Parallel()
+	answers := completeAnswers()
+	answers.Workflow = nil
+	plan, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileBaseline, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Unresolved) != 0 {
+		t.Fatalf("Unresolved = %v, want baseline to omit workflow controls", plan.Unresolved)
+	}
+}
+
+func TestProductionPlanRequiresEveryExecutableWorkflowDecision(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	plan, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"workflow.enabled",
+		"workflow.reviewers.architecture",
+		"workflow.reviewers.security",
+		"workflow.reviewers.correctness",
+		"workflow.reviewers.test_quality",
+		"workflow.reviewers.business_rules",
+		"workflow.reviewers.simplicity",
+		"workflow.correction",
+		"workflow.artifact.build",
+		"workflow.artifact.path",
+		"workflow.artifact.sbom",
+		"workflow.artifact.sbom_path",
+		"workflow.artifact.provenance",
+		"workflow.artifact.provenance_path",
+		"workflow.deployment.staging",
+		"workflow.deployment.production",
+		"workflow.deployment.rollback",
+		"workflow.deployment.health_checks",
+		"workflow.deployment.observation_checks",
+		"workflow.deployment.canary_percentages",
+		"workflow.migration",
+		"workflow.release_schedule.cron",
+		"workflow.release_schedule.timezone",
+	} {
+		if !contains(plan.Unresolved, required) {
+			t.Fatalf("Unresolved = %v, want %s", plan.Unresolved, required)
+		}
+	}
+	for _, category := range model.StaticGuardCategories {
+		if !contains(plan.Unresolved, "workflow.static_guards."+category) {
+			t.Fatalf("Unresolved = %v, want static guard %s", plan.Unresolved, category)
+		}
+	}
+	for _, category := range model.TestGuardCategories {
+		if !contains(plan.Unresolved, "workflow.test_guards."+category) {
+			t.Fatalf("Unresolved = %v, want test guard %s", plan.Unresolved, category)
+		}
+	}
+	if len(plan.Operations) != 0 {
+		t.Fatalf("Operations = %d, want no production install before workflow decisions", len(plan.Operations))
+	}
+}
+
+func TestProductionGuardRequiresCommandOrExplicitWaiver(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	answers.Workflow = completeWorkflow()
+	delete(answers.Workflow.TestGuards.Commands, model.GuardPerformance)
+	blocked, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(blocked.Unresolved, "workflow.test_guards.performance") {
+		t.Fatalf("Unresolved = %v, want missing performance guard", blocked.Unresolved)
+	}
+
+	answers.Workflow.TestGuards.Waivers[model.GuardPerformance] = "performance is measured by the mandatory production observation check"
+	resolved, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resolved.Unresolved) != 0 {
+		t.Fatalf("Unresolved = %v, want explicit guard waiver accepted", resolved.Unresolved)
+	}
+}
+
+func TestProductionAndRegulatedPlansAcceptCompleteWorkflow(t *testing.T) {
+	t.Parallel()
+	for _, profile := range []model.Profile{model.ProfileProduction, model.ProfileRegulated} {
+		profile := profile
+		t.Run(string(profile), func(t *testing.T) {
+			t.Parallel()
+			answers := productionAnswers()
+			answers.Workflow = completeWorkflow()
+			if profile == model.ProfileRegulated {
+				answers.Approvers = []string{"release-owner", "security-owner"}
+			}
+			plan, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, profile, answers)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(plan.Unresolved) != 0 {
+				t.Fatalf("Unresolved = %v, want complete %s workflow", plan.Unresolved, profile)
+			}
+			if len(plan.Operations) == 0 {
+				t.Fatal("Operations is empty after every executable decision was supplied")
+			}
+		})
+	}
+}
+
+func TestProductionWorkflowRequiresEnabledCorrection(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	answers.Workflow = completeWorkflow()
+	answers.Workflow.Correction = model.CorrectionConfig{}
+	plan, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(plan.Unresolved, "workflow.correction") {
+		t.Fatalf("Unresolved = %v, want workflow.correction", plan.Unresolved)
+	}
+}
+
+func TestProductionWorkflowRequiresFilesystemSandboxAttestation(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	answers.Workflow = completeWorkflow()
+	answers.Workflow.Correction.FilesystemSandboxed = false
+	plan, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(plan.Unresolved, "workflow.correction.filesystem_sandboxed") {
+		t.Fatalf("Unresolved = %v, want correction filesystem sandbox attestation", plan.Unresolved)
+	}
+}
+
+func TestBaselineEnabledCorrectionRequiresFilesystemSandboxAttestation(t *testing.T) {
+	t.Parallel()
+	answers := completeAnswers()
+	answers.Workflow = completeWorkflow()
+	answers.Workflow.Correction.FilesystemSandboxed = false
+	plan, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileBaseline, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(plan.Unresolved, "workflow.correction.filesystem_sandboxed") {
+		t.Fatalf("Unresolved = %v, want baseline correction filesystem sandbox attestation", plan.Unresolved)
+	}
+}
+
+func TestWorkflowReviewerRequiresFilesystemReadOnlyAttestation(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	answers.Workflow = completeWorkflow()
+	answers.Workflow.Reviewers[0].FilesystemReadOnly = false
+	role := answers.Workflow.Reviewers[0].Role
+	plan, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "workflow.reviewers." + string(role) + ".filesystem_read_only"
+	if !contains(plan.Unresolved, want) {
+		t.Fatalf("Unresolved = %v, want %s", plan.Unresolved, want)
+	}
+}
+
+func TestWorkflowOpenChangeRequestRequiresPublisherAuthority(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	answers.Workflow = completeWorkflow()
+	answers.Workflow.Correction.OpenChangeRequest = true
+	plan, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"network", "commit", "push"} {
+		if !contains(plan.Unresolved, "authority:"+action) {
+			t.Fatalf("Unresolved = %v, want authority:%s", plan.Unresolved, action)
+		}
+	}
+	if len(plan.Operations) != 0 {
+		t.Fatalf("Operations = %d, want no publisher rendered without authority", len(plan.Operations))
+	}
+}
+
+func TestProductionManagedAgenticWorkflowRequiresCISecrets(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	answers.Workflow = completeWorkflow()
+	managed := true
+	answers.AllowCIChanges = &managed
+	answers.CIProviders = []string{"github", "gitlab"}
+	plan, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, provider := range answers.CIProviders {
+		if !contains(plan.Unresolved, "ci_secrets:"+provider) {
+			t.Fatalf("Unresolved = %v, want ci_secrets:%s", plan.Unresolved, provider)
+		}
+		if contains(plan.Unresolved, "ci_agent_secret_environment:"+provider) {
+			t.Fatalf("Unresolved = %v, no binding exists for %s", plan.Unresolved, provider)
+		}
+	}
+	if len(plan.Operations) != 0 {
+		t.Fatalf("Operations = %d, want no managed production pipeline before secret decisions", len(plan.Operations))
+	}
+}
+
+func TestProductionOnlySecretBindingDoesNotResolveAgenticWorkflow(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	answers.Workflow = completeWorkflow()
+	managed := true
+	answers.AllowCIChanges = &managed
+	answers.CIProviders = []string{"github"}
+	answers.CISecretBindings = map[string][]model.CISecretBinding{
+		"github": {{Scope: model.CISecretScopeProduction, Environment: "DEPLOY_TOKEN", Secret: "PRODUCTION_DEPLOY_TOKEN"}},
+	}
+	answers.AgentSecretEnvironments = map[string]string{"github": "agent-secrets"}
+	plan, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(plan.Unresolved, "ci_secrets:github") {
+		t.Fatalf("Unresolved = %v, want review and repair secret decision", plan.Unresolved)
+	}
+}
+
+func TestProductionManagedBindingsRequireProtectedAgentSecretEnvironment(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	answers.Workflow = completeWorkflow()
+	trustWorkflowCommands(answers.Workflow)
+	managed := true
+	answers.AllowCIChanges = &managed
+	answers.CIProviders = []string{"github"}
+	answers.CISecretBindings = map[string][]model.CISecretBinding{
+		"github": {
+			{Scope: model.CISecretScopeReview, Environment: "REVIEW_ENV", Secret: "OPENAI_API_KEY"},
+			{Scope: model.CISecretScopeRepair, Environment: "REPAIR_ENV", Secret: "CORRECTION_API_KEY"},
+		},
+	}
+	answers.CISecretWaivers = map[string]string{"github": "workload identity covers fallback agent authentication"}
+	blocked, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(blocked.Unresolved, "ci_agent_secret_environment:github") {
+		t.Fatalf("Unresolved = %v, want protected agent secret environment decision", blocked.Unresolved)
+	}
+	if contains(blocked.Unresolved, "ci_secrets:github") {
+		t.Fatalf("Unresolved = %v, review and repair bindings should already resolve secret names", blocked.Unresolved)
+	}
+
+	answers.AgentSecretEnvironments = map[string]string{"github": "agent-secrets"}
+	answers.AgentControlPlanes = map[string]model.AgentControlPlane{"github": githubAgentControlPlane()}
+	resolved, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resolved.Unresolved) != 0 || len(resolved.Operations) == 0 {
+		t.Fatalf("resolved plan = %#v, protected environment decision was ignored", resolved)
+	}
+}
+
+func TestPlanRoundTripPreservesAgentSecretEnvironmentForUpgrade(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	plan := model.Plan{
+		Root: root,
+		Answers: model.Answers{
+			AgentSecretEnvironments: map[string]string{"github": "agent-secrets"},
+		},
+	}
+	plan.ID = CalculateID(plan)
+	path := filepath.Join(t.TempDir(), "plan.json")
+	if _, err := Save(plan, path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Answers.AgentSecretEnvironments["github"]; got != "agent-secrets" {
+		t.Fatalf("agent secret environment = %q, want agent-secrets after plan round trip", got)
+	}
+}
+
+func TestPlanRoundTripPreservesAgentControlPlaneForUpgrade(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	plan := model.Plan{
+		Root: root,
+		Answers: model.Answers{
+			AgentControlPlanes: map[string]model.AgentControlPlane{
+				"github": githubAgentControlPlane(),
+			},
+		},
+	}
+	plan.ID = CalculateID(plan)
+	path := filepath.Join(t.TempDir(), "plan.json")
+	if _, err := Save(plan, path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Answers.AgentControlPlanes["github"]; got != githubAgentControlPlane() {
+		t.Fatalf("agent control plane = %#v, want %#v", got, githubAgentControlPlane())
+	}
+}
+
+func TestProductionProviderBoundAgentsRequireControlPlane(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		provider string
+		profile  model.Profile
+		control  model.AgentControlPlane
+	}{
+		{provider: "github", profile: model.ProfileProduction, control: githubAgentControlPlane()},
+		{provider: "gitlab", profile: model.ProfileRegulated, control: model.AgentControlPlane{Mode: model.AgentControlPlaneModeExternal, RequiredCheck: "sam-harness/review", ExternalProject: "trusted/review-control"}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.provider, func(t *testing.T) {
+			t.Parallel()
+			answers := productionAnswers()
+			if test.profile == model.ProfileRegulated {
+				answers.Approvers = []string{"release-owner", "security-owner"}
+			}
+			answers.Workflow = completeWorkflow()
+			trustWorkflowCommands(answers.Workflow)
+			managed := true
+			answers.AllowCIChanges = &managed
+			answers.CIProviders = []string{test.provider}
+			answers.CISecretBindings = map[string][]model.CISecretBinding{
+				test.provider: {
+					{Scope: model.CISecretScopeReview, Environment: "REVIEW_ENV", Secret: "REVIEW_API_KEY"},
+					{Scope: model.CISecretScopeRepair, Environment: "REPAIR_ENV", Secret: "REPAIR_API_KEY"},
+				},
+			}
+			answers.AgentSecretEnvironments = map[string]string{test.provider: "agent-secrets"}
+			blocked, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, test.profile, answers)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "ci_agent_control_plane:" + test.provider
+			if !contains(blocked.Unresolved, want) || len(blocked.Operations) != 0 {
+				t.Fatalf("plan = %#v, want unresolved %s and no rendered pipeline", blocked, want)
+			}
+
+			answers.AgentControlPlanes = map[string]model.AgentControlPlane{test.provider: test.control}
+			resolved, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, test.profile, answers)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if contains(resolved.Unresolved, want) || len(resolved.Unresolved) != 0 || len(resolved.Operations) == 0 {
+				t.Fatalf("resolved plan = %#v, trusted provider control plane was ignored", resolved)
+			}
+		})
+	}
+}
+
+func TestCreateRejectsInvalidAgentControlPlanes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		provider string
+		control  model.AgentControlPlane
+	}{
+		{name: "unknown provider", provider: "circleci", control: githubAgentControlPlane()},
+		{name: "unsafe required check", provider: "github", control: model.AgentControlPlane{Mode: model.AgentControlPlaneModeGitHubApp, RequiredCheck: "review;publish", AppIDSecret: "SAM_HARNESS_APP_ID", AppPrivateKeySecret: "SAM_HARNESS_APP_PRIVATE_KEY"}},
+		{name: "unsafe external project", provider: "gitlab", control: model.AgentControlPlane{Mode: model.AgentControlPlaneModeExternal, RequiredCheck: "sam-harness/review", ExternalProject: "trusted/../review"}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			answers := productionAnswers()
+			answers.AgentControlPlanes = map[string]model.AgentControlPlane{test.provider: test.control}
+			if _, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers); err == nil {
+				t.Fatalf("Create() accepted %s", test.name)
+			}
+		})
+	}
+}
+
+func TestProductionManagedAgenticWorkflowAcceptsScopedSecretBindingsOrWaiver(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	answers.Workflow = completeWorkflow()
+	trustWorkflowCommands(answers.Workflow)
+	managed := true
+	answers.AllowCIChanges = &managed
+	answers.CIProviders = []string{"github", "gitlab"}
+	answers.CISecretBindings = map[string][]model.CISecretBinding{
+		"github": {
+			{Scope: model.CISecretScopeReview, Environment: "REVIEW_ENV", Secret: "OPENAI_API_KEY"},
+			{Scope: model.CISecretScopeRepair, Environment: "REPAIR_ENV", Secret: "CORRECTION_API_KEY"},
+		},
+	}
+	answers.AgentSecretEnvironments = map[string]string{"github": "agent-secrets"}
+	answers.AgentControlPlanes = map[string]model.AgentControlPlane{"github": githubAgentControlPlane()}
+	answers.CISecretWaivers = map[string]string{
+		"gitlab": "all configured commands are credential-free",
+	}
+	plan, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, provider := range answers.CIProviders {
+		if contains(plan.Unresolved, "ci_secrets:"+provider) {
+			t.Fatalf("Unresolved = %v, explicit secret decision for %s was ignored", plan.Unresolved, provider)
+		}
+		if contains(plan.Unresolved, "ci_agent_secret_environment:"+provider) {
+			t.Fatalf("Unresolved = %v, protected environment decision for %s is wrong", plan.Unresolved, provider)
+		}
+	}
+	if len(plan.Unresolved) != 0 || len(plan.Operations) == 0 {
+		t.Fatalf("plan = %#v, binding environment plus waiver-only provider should be fully resolved", plan)
+	}
+}
+
+func TestProductionSecretBindingsRequireTrustedExternalCommands(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	answers.Workflow = completeWorkflow()
+	managed := true
+	answers.AllowCIChanges = &managed
+	answers.CIProviders = []string{"github"}
+	answers.CISecretBindings = map[string][]model.CISecretBinding{
+		"github": {
+			{Scope: model.CISecretScopeReview, Environment: "REVIEW_ENV", Secret: "REVIEW_API_KEY"},
+			{Scope: model.CISecretScopeRepair, Environment: "REPAIR_ENV", Secret: "REPAIR_API_KEY"},
+		},
+	}
+	answers.AgentSecretEnvironments = map[string]string{"github": "agent-secrets"}
+	answers.AgentControlPlanes = map[string]model.AgentControlPlane{"github": githubAgentControlPlane()}
+	blocked, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range model.ReviewerRoles {
+		want := "workflow.reviewers." + string(role) + ".trusted_external_command"
+		if !contains(blocked.Unresolved, want) {
+			t.Fatalf("Unresolved = %v, want %s", blocked.Unresolved, want)
+		}
+	}
+	if !contains(blocked.Unresolved, "workflow.correction.trusted_external_command") {
+		t.Fatalf("Unresolved = %v, want correction trusted command attestation", blocked.Unresolved)
+	}
+	if len(blocked.Operations) != 0 {
+		t.Fatalf("Operations = %d, want secret-bearing pipeline blocked", len(blocked.Operations))
+	}
+
+	trustWorkflowCommands(answers.Workflow)
+	resolved, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resolved.Unresolved) != 0 || len(resolved.Operations) == 0 {
+		t.Fatalf("resolved plan = %#v", resolved)
+	}
+}
+
+func TestPlannerRejectsTargetControlledReviewerHelperWithSecrets(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	answers.Workflow = completeWorkflow()
+	trustWorkflowCommands(answers.Workflow)
+	managed := true
+	answers.AllowCIChanges = &managed
+	answers.CIProviders = []string{"github"}
+	answers.CISecretBindings = map[string][]model.CISecretBinding{
+		"github": {{Scope: model.CISecretScopeReview, Environment: "REVIEW_ENV", Secret: "REVIEW_API_KEY"}},
+	}
+	answers.CISecretWaivers = map[string]string{"github": "repair uses workload identity without a provider secret"}
+	answers.AgentSecretEnvironments = map[string]string{"github": "agent-secrets"}
+	answers.AgentControlPlanes = map[string]model.AgentControlPlane{"github": githubAgentControlPlane()}
+	answers.Workflow.Reviewers[0].Command = []string{"node", "./reviewer.js"}
+	if _, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers); err == nil {
+		t.Fatal("Create() accepted a target-controlled reviewer script with provider secrets")
+	}
+
+	answers.Workflow.Reviewers[0].TrustedConfigArguments = []int{1}
+	plan, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatalf("Create() rejected explicitly trusted-config-relative reviewer script: %v", err)
+	}
+	if len(plan.Unresolved) != 0 || len(plan.Operations) == 0 {
+		t.Fatalf("plan = %#v, trusted helper should resolve from config root", plan)
+	}
+}
+
+func TestCreateRejectsInvalidAgentSecretEnvironments(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		environments map[string]string
+	}{
+		{name: "unknown provider", environments: map[string]string{"circleci": "agent-secrets"}},
+		{name: "unsafe name", environments: map[string]string{"github": "agent secrets"}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			answers := productionAnswers()
+			answers.AgentSecretEnvironments = test.environments
+			if _, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers); err == nil {
+				t.Fatalf("Create() accepted %s", test.name)
+			}
+		})
+	}
+}
+
 func TestCreateStopsForUnresolvedRepositoryCommands(t *testing.T) {
 	t.Parallel()
 	scan := model.ScanResult{
@@ -249,6 +771,92 @@ func completeAnswers() model.Answers {
 		AllowCIChanges:      &allowCI,
 		AllowedActions:      &actions,
 	}
+}
+
+func productionAnswers() model.Answers {
+	answers := completeAnswers()
+	truth := true
+	answers.DeploysToProduction = &truth
+	answers.ObservationWindow = "30m"
+	answers.RollbackOwner = "release-owner"
+	answers.ProductionEnvironment = "production"
+	return answers
+}
+
+func completeWorkflow() *model.WorkflowConfig {
+	reviewers := make([]model.ReviewerConfig, 0, len(model.ReviewerRoles))
+	for _, role := range model.ReviewerRoles {
+		reviewers = append(reviewers, model.ReviewerConfig{
+			Role:               role,
+			Command:            []string{"review-agent", "--json"},
+			TimeoutSeconds:     60,
+			FilesystemReadOnly: true,
+		})
+	}
+	command := func(name string, argv ...string) model.CommandSpec {
+		return model.CommandSpec{Name: name, Workdir: ".", Command: argv, Required: true, TimeoutSeconds: 60}
+	}
+	return &model.WorkflowConfig{
+		Enabled:      true,
+		StaticGuards: guardSet(model.StaticGuardCategories, command),
+		TestGuards:   guardSet(model.TestGuardCategories, command),
+		Reviewers:    reviewers,
+		Correction: model.CorrectionConfig{
+			Enabled:             true,
+			FilesystemSandboxed: true,
+			Command:             []string{"repair-agent", "--receipt", "-"},
+			MaxAttempts:         2,
+			MaxChangedFiles:     5,
+			MaxChangedLines:     200,
+			BranchPrefix:        "sam-harness/repair/",
+			OpenChangeRequest:   false,
+		},
+		Artifact: model.ArtifactWorkflow{
+			Build:          command("build", "go", "build", "-o", "dist/sam-harness", "./cmd/sam-harness"),
+			ArtifactPath:   "dist/sam-harness",
+			SBOM:           command("sbom", "syft", "dist/sam-harness", "-o", "spdx-json=dist/sbom.json"),
+			SBOMPath:       "dist/sbom.json",
+			Provenance:     command("provenance", "provenance", "dist/sam-harness"),
+			ProvenancePath: "dist/provenance.json",
+		},
+		Deployment: model.DeploymentWorkflow{
+			Staging:           command("staging", "deploy", "staging"),
+			Production:        command("production", "deploy", "production"),
+			Rollback:          command("rollback", "deploy", "rollback"),
+			HealthChecks:      []model.CommandSpec{command("health", "check", "health")},
+			ObservationChecks: []model.CommandSpec{command("observe", "check", "metrics")},
+			CanaryPercentages: []int{10, 50, 100},
+		},
+		Migration:       []model.CommandSpec{command("migration", "migrate", "up")},
+		ReleaseSchedule: model.ReleaseSchedule{Cron: "0 9 * * 1", Timezone: "UTC"},
+	}
+}
+
+func trustWorkflowCommands(workflow *model.WorkflowConfig) {
+	for index := range workflow.Reviewers {
+		workflow.Reviewers[index].TrustedExternalCommand = true
+	}
+	workflow.Correction.TrustedExternalCommand = true
+}
+
+func githubAgentControlPlane() model.AgentControlPlane {
+	return model.AgentControlPlane{
+		Mode:                model.AgentControlPlaneModeGitHubApp,
+		RequiredCheck:       "sam-harness/review",
+		AppIDSecret:         "SAM_HARNESS_APP_ID",
+		AppPrivateKeySecret: "SAM_HARNESS_APP_PRIVATE_KEY",
+	}
+}
+
+func guardSet(categories []string, command func(string, ...string) model.CommandSpec) model.GuardSet {
+	guards := model.GuardSet{
+		Commands: make(map[string]model.CommandSpec, len(categories)),
+		Waivers:  map[string]string{},
+	}
+	for _, category := range categories {
+		guards.Commands[category] = command(category, "guard", category)
+	}
+	return guards
 }
 
 func contains(values []string, target string) bool {

@@ -1,0 +1,90 @@
+{
+  "criticality": "high",
+  "data_sensitivity": "internal",
+  "deploys_to_production": true,
+  "persistent_data": true,
+  "irreversible_actions": false,
+  "approvers": ["fixture-release-owner", "fixture-security-owner"],
+  "allow_ci_changes": true,
+  "ci_providers": ["github", "gitlab"],
+  "allowed_actions": ["write_repository", "network", "commit", "push", "release", "deploy"],
+  "ci_setup_commands": {
+    "github": [{"workdir": ".", "command": ["go", "version"]}],
+    "gitlab": [{"workdir": ".", "command": ["go", "version"]}]
+  },
+  "ci_secret_waivers": {
+    "github": "The synthetic fixture uses a deterministic local reviewer and correction command with no external credentials.",
+    "gitlab": "The synthetic fixture uses a deterministic local reviewer and correction command with no external credentials."
+  },
+  "gitlab_image": "golang:1.27",
+  "observation_window": "two successful observation checks after production promotion",
+  "rollback_owner": "fixture-release-owner",
+  "production_environment": "production",
+  "workflow": {
+    "enabled": true,
+    "static_guards": {
+      "commands": {
+        "format": {"name": "verify formatting", "workdir": ".", "command": ["go", "run", "./tools/lifecycle", "check-format"], "required": true, "timeout_seconds": 60},
+        "lint": {"name": "go vet", "workdir": ".", "command": ["go", "vet", "./..."], "required": true, "timeout_seconds": 60},
+        "typecheck": {"name": "compile packages", "workdir": ".", "command": ["go", "test", "-run", "^$", "./..."], "required": true, "timeout_seconds": 60},
+        "dependencies": {"name": "resolve dependencies", "workdir": ".", "command": ["go", "list", "-deps", "./..."], "required": true, "timeout_seconds": 60},
+        "project_policies": {"name": "fixture policy preflight", "workdir": ".", "command": ["go", "run", "./tools/lifecycle", "preflight"], "required": true, "timeout_seconds": 60}
+      },
+      "waivers": {
+        "architecture": "The fixture is a single isolated Go module with no cross-layer dependency boundary.",
+        "security": "The synthetic fixture has no network, credentials, user input or deployable service surface.",
+        "schema": "The fixture has no API, database or message schema."
+      }
+    },
+    "test_guards": {
+      "commands": {
+        "unit": {"name": "unit and compile tests", "workdir": ".", "command": ["go", "test", "./..."], "required": true, "timeout_seconds": 60},
+        "e2e": {"name": "fixture preflight", "workdir": ".", "command": ["go", "run", "./tools/lifecycle", "preflight"], "required": true, "timeout_seconds": 60}
+      },
+      "waivers": {
+        "integration": "The fixture has no external collaborator or secondary process.",
+        "contract": "The fixture publishes no API or event contract.",
+        "business_invariants": "The fixture contains no business state beyond lifecycle proof files.",
+        "property": "The fixture has no input domain requiring generative property coverage.",
+        "mutation": "The fixture contains no decision logic whose test sensitivity needs mutation analysis.",
+        "performance": "The fixture has no latency or throughput objective."
+      }
+    },
+    "reviewers": [
+      {"role": "architecture", "command": ["go", "run", "./tools/lifecycle", "review"], "timeout_seconds": 60, "filesystem_read_only": true},
+      {"role": "security", "command": ["go", "run", "./tools/lifecycle", "review"], "timeout_seconds": 60, "filesystem_read_only": true},
+      {"role": "correctness", "command": ["go", "run", "./tools/lifecycle", "review"], "timeout_seconds": 60, "filesystem_read_only": true},
+      {"role": "test_quality", "command": ["go", "run", "./tools/lifecycle", "review"], "timeout_seconds": 60, "filesystem_read_only": true},
+      {"role": "business_rules", "command": ["go", "run", "./tools/lifecycle", "review"], "timeout_seconds": 60, "filesystem_read_only": true},
+      {"role": "simplicity", "command": ["go", "run", "./tools/lifecycle", "review"], "timeout_seconds": 60, "filesystem_read_only": true}
+    ],
+    "correction": {
+      "enabled": true,
+      "command": ["go", "run", "./tools/lifecycle", "repair"],
+      "max_attempts": 2,
+      "max_changed_files": 3,
+      "max_changed_lines": 20,
+      "branch_prefix": "sam-harness/fix-",
+      "open_change_request": true,
+      "filesystem_sandboxed": true
+    },
+    "artifact": {
+      "build": {"name": "build immutable artifact", "workdir": ".", "command": ["go", "run", "./tools/lifecycle", "artifact"], "required": true, "timeout_seconds": 60},
+      "artifact_path": "dist/application.bin",
+      "sbom": {"name": "generate SBOM", "workdir": ".", "command": ["go", "run", "./tools/lifecycle", "sbom"], "required": true, "timeout_seconds": 60},
+      "sbom_path": "dist/sbom.cdx.json",
+      "provenance": {"name": "generate provenance", "workdir": ".", "command": ["go", "run", "./tools/lifecycle", "provenance"], "required": true, "timeout_seconds": 60},
+      "provenance_path": "dist/provenance.json"
+    },
+    "deployment": {
+      "staging": {"name": "deploy staging", "workdir": ".", "command": ["go", "run", "./tools/lifecycle", "staging"], "required": true, "timeout_seconds": 60},
+      "production": {"name": "promote production", "workdir": ".", "command": ["go", "run", "./tools/lifecycle", "production"], "required": true, "timeout_seconds": 60},
+      "rollback": {"name": "rollback production", "workdir": ".", "command": ["go", "run", "./tools/lifecycle", "rollback"], "required": true, "timeout_seconds": 60},
+      "health_checks": [{"name": "production health", "workdir": ".", "command": ["go", "run", "./tools/lifecycle", "health"], "required": true, "timeout_seconds": 60}],
+      "observation_checks": [{"name": "observe production", "workdir": ".", "command": ["go", "run", "./tools/lifecycle", "observe"], "required": true, "timeout_seconds": 60}],
+      "canary_percentages": [1, 5, 25, 50, 100]
+    },
+    "migration": [{"name": "migration reconciliation", "workdir": ".", "command": ["go", "run", "./tools/lifecycle", "migration"], "required": true, "timeout_seconds": 60}],
+    "release_schedule": {"cron": "0 15 * * 3", "timezone": "UTC"}
+  }
+}

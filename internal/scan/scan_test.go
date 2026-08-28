@@ -106,6 +106,36 @@ func TestRunAsksWhenPackageManagerIsAmbiguous(t *testing.T) {
 	}
 }
 
+func TestRunAsksWhenPackageManagerCannotBeProven(t *testing.T) {
+	t.Parallel()
+	parent := t.TempDir()
+	if err := os.WriteFile(filepath.Join(parent, "package-lock.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(parent, "repository")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"test":"node --test"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Run(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Stacks) != 1 {
+		t.Fatalf("Stacks = %#v, want one TypeScript stack", result.Stacks)
+	}
+	stack := result.Stacks[0]
+	if stack.PackageManager != "" || len(stack.Commands) != 0 {
+		t.Fatalf("Stack = %#v, want unresolved package-manager command", stack)
+	}
+	if !containsQuestion(result.Questions, "commands:typescript:.") {
+		t.Fatalf("Questions = %v, want package-manager decision", result.Questions)
+	}
+}
+
 func containsQuestion(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {

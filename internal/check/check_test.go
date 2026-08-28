@@ -72,6 +72,36 @@ func TestRunResolvesRelativeExecutableAgainstGateWorkdir(t *testing.T) {
 	}
 }
 
+func TestRunIncludesExecutedAndWaivedWorkflowGuards(t *testing.T) {
+	root := t.TempDir()
+	script := filepath.Join(root, "guard.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig()
+	cfg.Gates = nil
+	cfg.Workflow = validWorkflow()
+	cfg.Workflow.StaticGuards.Commands[model.GuardFormat] = model.CommandSpec{
+		Name: "format", Workdir: ".", Command: []string{"./guard.sh"}, Required: true, TimeoutSeconds: 5,
+	}
+	delete(cfg.Workflow.StaticGuards.Waivers, model.GuardFormat)
+	writeConfig(t, root, cfg)
+
+	report, _, err := Run(root, false)
+	if err != nil {
+		t.Fatalf("Run() failed: %v\n%#v", err, report)
+	}
+	if !report.Passed || len(report.Results) != len(model.StaticGuardCategories)+len(model.TestGuardCategories) {
+		t.Fatalf("guard report = %#v", report)
+	}
+	if !report.Results[0].Passed || report.Results[0].Skipped {
+		t.Fatalf("executed guard was not recorded as a pass: %#v", report.Results[0])
+	}
+	if !report.Results[1].Skipped || report.Results[1].Passed || report.Results[1].Output == "" {
+		t.Fatalf("waiver was disguised as execution: %#v", report.Results[1])
+	}
+}
+
 func testConfig() model.Config {
 	return model.Config{
 		SchemaVersion:  model.SchemaVersion,
@@ -109,5 +139,38 @@ func writeConfig(t *testing.T, root string, cfg model.Config) {
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func validWorkflow() *model.WorkflowConfig {
+	command := func(name string) model.CommandSpec {
+		return model.CommandSpec{Name: name, Workdir: ".", Command: []string{"go", "version"}, Required: true, TimeoutSeconds: 5}
+	}
+	waivers := func(categories []string) model.GuardSet {
+		values := make(map[string]string, len(categories))
+		for _, category := range categories {
+			values[category] = "not applicable to the check fixture"
+		}
+		return model.GuardSet{Commands: map[string]model.CommandSpec{}, Waivers: values}
+	}
+	reviewers := make([]model.ReviewerConfig, 0, len(model.ReviewerRoles))
+	for _, role := range model.ReviewerRoles {
+		reviewers = append(reviewers, model.ReviewerConfig{Role: role, Command: []string{"go", "version"}, TimeoutSeconds: 5, FilesystemReadOnly: true})
+	}
+	return &model.WorkflowConfig{
+		Enabled:      true,
+		StaticGuards: waivers(model.StaticGuardCategories),
+		TestGuards:   waivers(model.TestGuardCategories),
+		Reviewers:    reviewers,
+		Artifact: model.ArtifactWorkflow{
+			Build: command("build"), ArtifactPath: "out/app.bin",
+			SBOM: command("sbom"), SBOMPath: "out/sbom.json",
+			Provenance: command("provenance"), ProvenancePath: "out/provenance.json",
+		},
+		Deployment: model.DeploymentWorkflow{
+			Staging: command("staging"), Production: command("production"), Rollback: command("rollback"),
+			HealthChecks: []model.CommandSpec{command("health")}, ObservationChecks: []model.CommandSpec{command("observe")}, CanaryPercentages: []int{100},
+		},
+		Migration: []model.CommandSpec{command("migration")}, ReleaseSchedule: model.ReleaseSchedule{Cron: "0 9 * * 1", Timezone: "UTC"},
 	}
 }

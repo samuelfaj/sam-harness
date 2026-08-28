@@ -12,6 +12,7 @@ import (
 
 	"github.com/samuelfaj/sam-harness/internal/config"
 	"github.com/samuelfaj/sam-harness/internal/model"
+	"github.com/samuelfaj/sam-harness/internal/pipeline"
 	"github.com/samuelfaj/sam-harness/internal/repo"
 )
 
@@ -38,11 +39,30 @@ func Run(path string, writeReceipt bool) (model.CheckReport, string, error) {
 		Passed:         true,
 		CreatedAt:      time.Now().UTC(),
 	}
-	for _, gate := range cfg.Gates {
-		result := runGate(root, gate)
-		report.Results = append(report.Results, result)
-		if gate.Required && !result.Passed {
+	for _, phase := range []model.Phase{model.PhaseStatic, model.PhaseTest} {
+		phaseReceipt, _, phaseErr := pipeline.Run(root, phase, false)
+		if phaseErr != nil {
 			report.Passed = false
+		}
+		for _, command := range phaseReceipt.Commands {
+			stage := command.Stage
+			if stage == "" {
+				stage = string(command.Phase)
+			}
+			report.Results = append(report.Results, model.GateResult{
+				Name:       command.Name,
+				Stage:      stage,
+				Command:    append([]string(nil), command.Command...),
+				Workdir:    command.Workdir,
+				Required:   command.Required,
+				Passed:     command.Passed,
+				Skipped:    command.Skipped,
+				ExitCode:   command.ExitCode,
+				Duration:   command.Duration,
+				Output:     command.Output,
+				StartedAt:  command.StartedAt,
+				FinishedAt: command.FinishedAt,
+			})
 		}
 	}
 	receiptPath := ""
