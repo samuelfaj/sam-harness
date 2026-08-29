@@ -9,20 +9,26 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/samuelfaj/sam-harness/internal/adopt"
 	applyplan "github.com/samuelfaj/sam-harness/internal/apply"
+	"github.com/samuelfaj/sam-harness/internal/bootstrap"
 	checkrun "github.com/samuelfaj/sam-harness/internal/check"
 	"github.com/samuelfaj/sam-harness/internal/config"
 	"github.com/samuelfaj/sam-harness/internal/doctor"
+	"github.com/samuelfaj/sam-harness/internal/freeze"
 	"github.com/samuelfaj/sam-harness/internal/model"
 	pipelinerun "github.com/samuelfaj/sam-harness/internal/pipeline"
 	"github.com/samuelfaj/sam-harness/internal/planner"
 	"github.com/samuelfaj/sam-harness/internal/scan"
+	"github.com/samuelfaj/sam-harness/internal/stage"
 )
 
 type CLI struct {
-	Stdout io.Writer
-	Stderr io.Writer
+	Stdout             io.Writer
+	Stderr             io.Writer
+	BootstrapTransport bootstrap.Transport
 }
 
 func New(stdout, stderr io.Writer) *CLI {
@@ -51,6 +57,16 @@ func (c *CLI) Run(args []string) error {
 		return c.doctor(args[1:])
 	case "upgrade":
 		return c.upgrade(args[1:])
+	case "onboard":
+		return c.onboard(args[1:])
+	case "adopt":
+		return c.adopt(args[1:])
+	case "bootstrap":
+		return c.bootstrap(args[1:])
+	case "stage":
+		return c.stage(args[1:])
+	case "freeze":
+		return c.freeze(args[1:])
 	case "version", "--version", "-v":
 		fmt.Fprintf(c.Stdout, "sam-harness %s\n", model.HarnessVersion)
 		return nil
@@ -339,6 +355,248 @@ func (c *CLI) doctor(args []string) error {
 	return nil
 }
 
+func (c *CLI) onboard(args []string) error {
+	return c.runAdopt(adopt.ModeOnboard, args, false)
+}
+
+func (c *CLI) adopt(args []string) error {
+	return c.runAdopt("", args, true)
+}
+
+func (c *CLI) runAdopt(mode string, args []string, requireMode bool) error {
+	options, err := parseOptionsExt(args, map[string]bool{
+		"answers": true, "answers-output": true, "locale": true, "accept": true,
+		"output": true, "format": true, "interactive": true, "implement": true,
+		"waiver-control": true, "waiver-risk": true, "waiver-reason": true, "waiver-owner": true,
+		"auto": true, "guided": true,
+	}, map[string]bool{"auto": true, "guided": true, "interactive": true})
+	if err != nil {
+		return err
+	}
+	if requireMode {
+		auto := options.values["auto"] == "true"
+		guided := options.values["guided"] == "true"
+		if auto == guided {
+			return errors.New("adopt requires exactly one of --auto or --guided")
+		}
+		if auto {
+			mode = adopt.ModeAuto
+		} else {
+			mode = adopt.ModeGuided
+		}
+	}
+	interactive, err := boolOption(options, "interactive", false)
+	if err != nil {
+		return err
+	}
+	var stdin io.Reader
+	if interactive {
+		stdin = os.Stdin
+	}
+	report, runErr := adopt.Run(adopt.Options{
+		Root:             options.path(),
+		Mode:             mode,
+		AnswersPath:      options.values["answers"],
+		AnswersOutput:    options.values["answers-output"],
+		Locale:           options.value("locale", "en-US"),
+		AcceptPlanID:     options.values["accept"],
+		PlanOutput:       options.values["output"],
+		ImplementControl: options.values["implement"],
+		WaiverControl:    options.values["waiver-control"],
+		WaiverRisk:       options.values["waiver-risk"],
+		WaiverReason:     options.values["waiver-reason"],
+		WaiverOwner:      options.values["waiver-owner"],
+		Stdin:            stdin,
+		Stdout:           c.Stdout,
+		Interactive:      interactive,
+	})
+	if options.value("format", "human") == "json" {
+		if err := writeJSON(c.Stdout, report); err != nil {
+			return err
+		}
+	}
+	return runErr
+}
+
+func (c *CLI) bootstrap(args []string) error {
+	if len(args) == 0 || strings.HasPrefix(args[0], "--") {
+		return errors.New("bootstrap provider is required: github or gitlab")
+	}
+	provider := bootstrap.Provider(args[0])
+	if provider != "github" && provider != "gitlab" {
+		return fmt.Errorf("unknown bootstrap provider %q", args[0])
+	}
+	options, err := parseOptions(args[1:], map[string]bool{"accept": true, "format": true, "plan": true})
+	if err != nil {
+		return err
+	}
+	scanResult, err := scan.Run(options.path())
+	if err != nil {
+		return err
+	}
+	desired := bootstrap.RemoteState{
+		DefaultBranch:         "main",
+		ControlPlaneCheck:     "sam-harness/trusted-review",
+		ProtectedEnvironments: []string{"production"},
+		AllowSquash:           true,
+		RequiredChecks:        []string{freeze.RequiredCheckName()},
+		JobTexts: map[string]string{
+			"pull_request":  "sam-harness pipeline --phase static",
+			"merge_request": "sam-harness pipeline --phase static",
+		},
+	}
+	plan, err := bootstrap.CreatePlan(provider, scanResult.Fingerprint, desired)
+	if err != nil {
+		return err
+	}
+	if options.value("format", "human") == "json" && options.values["accept"] == "" {
+		return writeJSON(c.Stdout, plan)
+	}
+	fmt.Fprintf(c.Stdout, "Plan ID: %s\nProvider: %s\n", plan.ID, plan.Provider)
+	fmt.Fprintln(c.Stdout, "Mutations:")
+	for _, mutation := range plan.Mutations {
+		fmt.Fprintf(c.Stdout, "  - %s %s\n", mutation.Field, mutation.Value)
+	}
+	if options.values["accept"] == "" {
+		fmt.Fprintf(c.Stdout, "Apply only after approval: sam-harness bootstrap %s --accept %s\n", provider, plan.ID)
+		return nil
+	}
+	if c.BootstrapTransport == nil {
+		return errors.New("bootstrap apply requires an injected provider transport")
+	}
+	result, err := bootstrap.Apply(plan, options.values["accept"], c.BootstrapTransport)
+	if err != nil {
+		return err
+	}
+	if options.value("format", "human") == "json" {
+		return writeJSON(c.Stdout, result)
+	}
+	fmt.Fprintf(c.Stdout, "Ready: %t\n", result.Ready)
+	for _, mismatch := range result.Mismatches {
+		fmt.Fprintf(c.Stdout, "  mismatch %s\n", mismatch)
+	}
+	if len(result.Applied) == 0 {
+		fmt.Fprintln(c.Stdout, "No provider mutations applied.")
+	}
+	if !result.Ready {
+		return fmt.Errorf("bootstrap not ready: %s", strings.Join(result.Mismatches, "; "))
+	}
+	return nil
+}
+
+func (c *CLI) stage(args []string) error {
+	if len(args) == 0 || strings.HasPrefix(args[0], "--") {
+		return errors.New("stage name is required")
+	}
+	name := args[0]
+	options, err := parseOptions(args[1:], map[string]bool{"input": true, "format": true, "plan": true})
+	if err != nil {
+		return err
+	}
+	inputPath := options.values["input"]
+	if inputPath == "" {
+		return errors.New("--input is required")
+	}
+	data, err := os.ReadFile(inputPath)
+	if err != nil {
+		return err
+	}
+	var req stage.Request
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		return fmt.Errorf("parse stage input: %w", err)
+	}
+	req.Stage = name
+	if strings.TrimSpace(req.Root) == "" {
+		req.Root = options.path()
+	}
+	if planPath := options.values["plan"]; planPath != "" {
+		plan, err := planner.Load(planPath)
+		if err != nil {
+			return err
+		}
+		if req.PlanID != plan.ID || req.Fingerprint != plan.Fingerprint {
+			return fmt.Errorf("stage request is not bound to approved plan %s", plan.ID)
+		}
+	}
+	receipt, err := stage.Run(req)
+	if err != nil {
+		return err
+	}
+	if options.value("format", "human") == "json" {
+		return writeJSON(c.Stdout, receipt)
+	}
+	fmt.Fprintf(c.Stdout, "Stage: %s\nPlan ID: %s\nFingerprint: %s\nProof: %t\n", receipt.Stage, receipt.PlanID, receipt.Fingerprint, receipt.Proof)
+	if receipt.Summary != "" {
+		fmt.Fprintf(c.Stdout, "Summary: %s\n", receipt.Summary)
+	}
+	return nil
+}
+
+func (c *CLI) freeze(args []string) error {
+	if len(args) == 0 || args[0] != "check" {
+		return errors.New("freeze check is required")
+	}
+	options, err := parseOptionsExt(args[1:], map[string]bool{
+		"policy": true, "now": true, "exception": true, "head": true, "base": true,
+		"branch": true, "kind": true, "format": true, "scheduled-release": true, "workflow-can-disable": true,
+	}, map[string]bool{"scheduled-release": true, "workflow-can-disable": true})
+	if err != nil {
+		return err
+	}
+	policyPath := options.values["policy"]
+	if policyPath == "" {
+		return errors.New("--policy is required")
+	}
+	data, err := os.ReadFile(policyPath)
+	if err != nil {
+		return err
+	}
+	var policy freeze.Policy
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&policy); err != nil {
+		return fmt.Errorf("parse freeze policy: %w", err)
+	}
+	now := time.Time{}
+	if options.values["now"] != "" {
+		now, err = time.Parse(time.RFC3339, options.values["now"])
+		if err != nil {
+			return fmt.Errorf("--now must be RFC3339: %w", err)
+		}
+	}
+	req := freeze.CheckRequest{
+		HeadSHA:            options.values["head"],
+		BaseSHA:            options.values["base"],
+		Branch:             options.value("branch", "main"),
+		Kind:               options.value("kind", freeze.KindFeature),
+		ScheduledRelease:   options.values["scheduled-release"] == "true",
+		WorkflowCanDisable: options.values["workflow-can-disable"] == "true",
+	}
+	if options.values["exception"] != "" {
+		exData, err := os.ReadFile(options.values["exception"])
+		if err != nil {
+			return err
+		}
+		var exception freeze.Exception
+		exDecoder := json.NewDecoder(strings.NewReader(string(exData)))
+		exDecoder.DisallowUnknownFields()
+		if err := exDecoder.Decode(&exception); err != nil {
+			return fmt.Errorf("parse freeze exception: %w", err)
+		}
+		req.Exception = &exception
+	}
+	if err := freeze.Evaluate(policy, req, now); err != nil {
+		return err
+	}
+	if options.value("format", "human") == "json" {
+		return writeJSON(c.Stdout, map[string]any{"allowed": true, "check": freeze.RequiredCheckName()})
+	}
+	fmt.Fprintf(c.Stdout, "PASS %s\n", freeze.RequiredCheckName())
+	return nil
+}
+
 func (c *CLI) upgrade(args []string) error {
 	options, err := parseOptions(args, map[string]bool{"to": true, "output": true, "format": true, "answers": true})
 	if err != nil {
@@ -414,6 +672,10 @@ func (o parsedOptions) value(key, fallback string) string {
 }
 
 func parseOptions(args []string, accepted map[string]bool) (parsedOptions, error) {
+	return parseOptionsExt(args, accepted, nil)
+}
+
+func parseOptionsExt(args []string, accepted, flags map[string]bool) (parsedOptions, error) {
 	result := parsedOptions{values: map[string]string{}}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -428,8 +690,17 @@ func parseOptions(args []string, accepted map[string]bool) (parsedOptions, error
 			key = keyValue[:index]
 			value = keyValue[index+1:]
 		}
-		if !accepted[key] {
+		if !accepted[key] && (flags == nil || !flags[key]) {
 			return parsedOptions{}, fmt.Errorf("unknown option --%s", key)
+		}
+		if flags[key] && value == "" {
+			if i+1 < len(args) && (args[i+1] == "true" || args[i+1] == "false") {
+				i++
+				result.values[key] = args[i]
+				continue
+			}
+			result.values[key] = "true"
+			continue
 		}
 		if value == "" {
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
@@ -697,6 +968,11 @@ Usage:
   sam-harness scan [path] [--format human|json]
   sam-harness plan [path] [--profile auto|baseline|production|regulated] [--answers file] [--output file]
   sam-harness apply --plan file --accept plan-id [--format human|json]
+  sam-harness onboard [path] [--answers file] [--answers-output file] [--locale en-US|pt-BR|es] [--accept plan-id] [--output file] [--format human|json] [--interactive true|false]
+  sam-harness adopt [path] --auto|--guided [--answers file] [--answers-output file] [--locale en-US|pt-BR|es] [--accept plan-id] [--implement control] [--waiver-control id --waiver-risk text --waiver-reason text] [--output file] [--format human|json]
+  sam-harness bootstrap github|gitlab [path] [--accept plan-id] [--format human|json]
+  sam-harness stage classifier|context|planning|implementation|review|repair --input file [--format human|json]
+  sam-harness freeze check [path] [--policy file] [--now rfc3339] [--exception file] [--head sha] [--base sha] [--branch name] [--kind feature] [--scheduled-release true|false]
   sam-harness check [path] [--format human|json] [--receipt true|false]
   sam-harness pipeline [path] [--config absolute-or-contained-file] [--review-base absolute-directory --review-base-sha hex --review-head-sha hex] --phase static|test|review|artifact|staging|production|observe|rollback|migration|all [--receipt true|false]
   sam-harness repair [path] [--config absolute-or-contained-file] --receipt file [--receipt-output true|false]

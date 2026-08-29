@@ -2,11 +2,33 @@
 
 ## CLI availability
 
-Locate the repository root and check whether `sam-harness` is available. If it is absent, ask before downloading it. After approval, use [bootstrap.sh](../scripts/bootstrap.sh) on macOS/Linux or [bootstrap.ps1](../scripts/bootstrap.ps1) on Windows. The bootstrap requires Cosign and verifies the signed checksum bundle before installing the release binary in the user cache.
+Locate the repository root and check whether `sam-harness` is available. If it is absent, ask before downloading it. After approval, use [bootstrap.sh](../scripts/bootstrap.sh) on macOS/Linux or [bootstrap.ps1](../scripts/bootstrap.ps1) on Windows. The bootstrap requires Cosign and verifies the signed checksum bundle before installing the release binary in the user cache. The GitHub repository URL alone is enough to discover this skill, the verified CLI contract, and the commands below; do not fetch the binary until asked.
+
+Prefer this installed `$sam-harness` skill when it is present. A fresh agent that only has the GitHub URL must follow the same scan → interview → plan → approve → apply contract so both paths produce the same canonical plan (profile, unresolved set, operations) for the same repository and answers.
+
+## Guided commands
+
+Customer-facing prompts may be en-US, pt-BR, or es. Run one controller; do not invent production commands or infrastructure.
+
+```text
+sam-harness onboard <root> [--answers file] [--answers-output file] [--locale en-US|pt-BR|es] [--accept plan-id]
+sam-harness adopt <root> --auto [--answers file] [--answers-output file] [--locale en-US|pt-BR|es] [--accept plan-id]
+sam-harness adopt <root> --guided [--answers file] [--answers-output file] [--locale en-US|pt-BR|es] [--accept plan-id] [--implement control]
+```
+
+These commands scan first, ask only decisions the tree or provider cannot prove (each with impact and a safe default), write a reusable credential-free answers file outside the repository, support resume and non-interactive input, and print the proposed files, authority changes, gates, and plan ID before any repository write. Apply only with `--accept` of that plan ID. Re-running an already applied plan is a no-op.
+
+`--guided` also emits a coverage map whose only states are `existing-and-validated`, `missing-but-implementable`, `human-decision-required`, and `external-provider-required`. Approve each missing control separately. Convert an approved missing control into a bounded implementation task (acceptance, paths, commands, tests, budget, stop conditions), then re-scan and create a new expiring plan. Keep prior answers; reject stale approvals. Never turn a missing control into a waiver unless the operator gives an explicit risk and reason. Finish only when every control is implemented-and-proved, already validated, explicitly waived, or blocked with a named owner and next action. The finish report separates source, local checks, remote, CI, artifact, deployment, live observation, freeze, and production stability.
+
+`sam-harness bootstrap github` and `sam-harness bootstrap gitlab` mutate provider policy only from a separately accepted plan. They never create, print, or persist credential values. Ordinary PR/MR job texts stay free of bound agent secrets. Readiness requires remote readback equal to the plan.
+
+`sam-harness freeze check` evaluates the executable freeze policy. Ordinary features are blocked inside the window; only a fully evidenced configured exception may proceed.
+
+`sam-harness stage classifier|context|planning|implementation|review|repair --input file` runs the executable lifecycle stages. Each receipt is bound to the approved plan ID and repository fingerprint. An agent summary is not proof. `scan` and `plan` remain the trusted deterministic controls and still do not write tracked files.
 
 ## Discovery
 
-Run `sam-harness scan <root> --format json`. Use its output to identify stacks, workspaces, package managers, declared commands, CI providers, user interfaces, persistence, deployment files, Git state, and any existing harness.
+Run `sam-harness scan <root> --format json` or let `onboard`/`adopt` do it. Use the scan to identify stacks, workspaces, package managers, declared commands, CI providers, user interfaces, persistence, deployment files, Git state, and any existing harness.
 
 Do not ask the user for facts the repository already proves. Do not turn a filename hint into a business fact.
 
@@ -86,7 +108,7 @@ Generated secret-bearing jobs use a trusted released v0.2 CLI and pass `--config
 A legacy production or regulated configuration does not contain the required v0.2 workflow, CI secret decision, protected agent-environment/control-plane mappings, filesystem attestations, or trusted-external-command decisions. Collect the complete [workflow configuration](workflow-configuration.md), including provider bindings or explicit waivers, protected agent environments, control planes, verified reviewer/correction attestations, and any trusted config argv positions, in a temporary answers file outside the repository, then run:
 
 ```text
-sam-harness upgrade <root> --to 0.2.0 --answers <answers-file>
+sam-harness upgrade <root> --to 0.3.0 --answers <answers-file>
 ```
 
 Show unresolved decisions, every file operation, and the new plan ID. Apply only after the user approves that exact ID. If the repository fingerprint changes or the plan expires, discard it and create another upgrade plan.
