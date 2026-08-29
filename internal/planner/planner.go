@@ -144,6 +144,9 @@ func Create(scan model.ScanResult, requested model.Profile, answers model.Answer
 			}
 		}
 	}
+	if agentRuntimeRequired(applied, answers) {
+		unresolved = append(unresolved, missingAgentRuntimeAnswers(answers.CIAgentRuntime)...)
+	}
 	if workflowRequired && answers.AllowCIChanges != nil && *answers.AllowCIChanges {
 		for _, provider := range resolvedScan.CIProviders {
 			if len(answers.CISecretBindings[provider]) > 0 && strings.TrimSpace(answers.AgentSecretEnvironments[provider]) == "" {
@@ -294,6 +297,9 @@ func validateAnswers(answers model.Answers) error {
 	}
 	if answers.DataSensitivity != "" && answers.DataSensitivity != "public" && answers.DataSensitivity != "internal" && answers.DataSensitivity != "confidential" && answers.DataSensitivity != "regulated" {
 		return fmt.Errorf("data_sensitivity must be public, internal, confidential, or regulated")
+	}
+	if err := answers.CIAgentRuntime.Validate(); err != nil {
+		return fmt.Errorf("ci agent runtime: %w", err)
 	}
 	if answers.AllowedActions != nil {
 		allowed := map[string]bool{"write_repository": true, "network": true, "commit": true, "push": true, "release": true, "deploy": true}
@@ -608,6 +614,27 @@ func cloneCommands(commands map[string][]string) map[string][]string {
 		cloned[gate] = append([]string(nil), command...)
 	}
 	return cloned
+}
+
+func agentRuntimeRequired(profile model.Profile, answers model.Answers) bool {
+	if answers.AllowCIChanges == nil || !*answers.AllowCIChanges {
+		return false
+	}
+	if profileRank(profile) >= profileRank(model.ProfileProduction) {
+		return true
+	}
+	return answers.Workflow != nil && answers.Workflow.Enabled
+}
+
+func missingAgentRuntimeAnswers(runtime *model.CIAgentRuntime) []string {
+	var missing []string
+	if runtime == nil || !runtime.HostComplete() {
+		missing = append(missing, "ci_agent_host")
+	}
+	if runtime == nil || !runtime.LoginComplete() {
+		missing = append(missing, "ci_agent_login")
+	}
+	return missing
 }
 
 func profileRank(profile model.Profile) int {

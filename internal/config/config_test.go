@@ -839,6 +839,38 @@ func validSecretBoundProductionConfig() model.Config {
 	return cfg
 }
 
+func TestParseRejectsIncompleteAgentRuntime(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig()
+	cfg.CI.AgentRuntime = &model.CIAgentRuntime{Host: model.AgentHostOther, LoginMethod: model.AgentLoginManual}
+	if _, err := Parse(mustMarshalYAML(t, cfg)); err == nil {
+		t.Fatal("Parse() accepted incomplete agent runtime")
+	}
+}
+
+func TestMarshalPreservesAgentRuntimeAndCommitConvention(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig()
+	enabled := true
+	cfg.Governance.StandardizeCommits = &enabled
+	cfg.CI.AgentRuntime = &model.CIAgentRuntime{
+		Host:             model.AgentHostGrok,
+		LoginMethod:      model.AgentLoginAPIKey,
+		LoginEnvironment: "XAI_API_KEY",
+		LoginSecret:      "XAI_API_KEY",
+	}
+	parsed, err := Parse(mustMarshalYAML(t, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.CI.AgentRuntime == nil || parsed.CI.AgentRuntime.Host != model.AgentHostGrok || parsed.CI.AgentRuntime.LoginSecret != "XAI_API_KEY" {
+		t.Fatalf("agent runtime = %#v", parsed.CI.AgentRuntime)
+	}
+	if parsed.Governance.StandardizeCommits == nil || !*parsed.Governance.StandardizeCommits {
+		t.Fatal("standardize_commits was dropped")
+	}
+}
+
 func githubAgentControlPlane() model.AgentControlPlane {
 	return model.AgentControlPlane{
 		Mode:                model.AgentControlPlaneModeGitHubApp,

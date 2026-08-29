@@ -175,6 +175,7 @@ func approvedAnswers() model.Answers {
 		Approvers:           []string{"owner"},
 		AllowCIChanges:      &allowCI,
 		AllowedActions:      &actions,
+		StandardizeCommits:  &falsehood,
 	}
 }
 

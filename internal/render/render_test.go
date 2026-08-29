@@ -954,6 +954,53 @@ func TestBuildReviewTemplatesPreserveExistingContentAndAddEvidence(t *testing.T)
 	if !strings.Contains(gitlab, "Keep this MR checklist.") {
 		t.Fatalf("GitLab template lost existing content:\n%s", gitlab)
 	}
+	for path, content := range map[string]string{"github": github, "gitlab": gitlab} {
+		for _, want := range []string{"## Description", "## Type of Change", "## Behavior", "## Business Rules", "## Validation", "## Tests", "## Author Checklist"} {
+			if !strings.Contains(content, want) {
+				t.Fatalf("%s template omitted %q:\n%s", path, want, content)
+			}
+		}
+	}
+}
+
+func TestBuildWritesCommitConventionWhenEnabled(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	approved := answers()
+	enabled := true
+	approved.StandardizeCommits = &enabled
+	operations, err := Build(model.ScanResult{
+		Root:   root,
+		Stacks: []model.Stack{{Kind: "go", Path: ".", Commands: map[string][]string{"test": {"go", "test", "./..."}}}},
+	}, model.ProfileBaseline, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := operationContent(t, operations, ".sam-harness/COMMIT.md")
+	if !strings.Contains(content, "Conventional Commits") || !strings.Contains(content, "feat") {
+		t.Fatalf("COMMIT.md missing convention:\n%s", content)
+	}
+	agents := operationContent(t, operations, "AGENTS.md")
+	if !strings.Contains(agents, "Conventional Commits") {
+		t.Fatalf("AGENTS.md omitted commit convention:\n%s", agents)
+	}
+}
+
+func TestBuildOmitsCommitConventionWhenDisabled(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	operations, err := Build(model.ScanResult{
+		Root:   root,
+		Stacks: []model.Stack{{Kind: "go", Path: ".", Commands: map[string][]string{"test": {"go", "test", "./..."}}}},
+	}, model.ProfileBaseline, answers())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range operations {
+		if operation.Path == ".sam-harness/COMMIT.md" {
+			t.Fatal("COMMIT.md was planned without permission")
+		}
+	}
 }
 
 func answers() model.Answers {
@@ -969,6 +1016,7 @@ func answers() model.Answers {
 		Approvers:           []string{"owner"},
 		AllowCIChanges:      &allowCI,
 		AllowedActions:      &actions,
+		StandardizeCommits:  &falsehood,
 	}
 }
 
@@ -1082,7 +1130,14 @@ func productionAnswers() model.Answers {
 		ObservationWindow:     "24 hours",
 		RollbackOwner:         "release owner",
 		ProductionEnvironment: "production",
-		Workflow:              workflow,
+		StandardizeCommits:    &truth,
+		CIAgentRuntime: &model.CIAgentRuntime{
+			Host:             model.AgentHostCodex,
+			LoginMethod:      model.AgentLoginAPIKey,
+			LoginEnvironment: "REVIEW_ENV",
+			LoginSecret:      "OPENAI_API_KEY",
+		},
+		Workflow: workflow,
 	}
 }
 

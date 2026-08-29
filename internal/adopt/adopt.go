@@ -839,6 +839,34 @@ func setAnswerField(answers model.Answers, id, value string) model.Answers {
 		answers.ProductionEnvironment = value
 	case "risk_acceptance":
 		answers.RiskAcceptance = value
+	case "ci_agent_host":
+		if answers.CIAgentRuntime == nil {
+			answers.CIAgentRuntime = &model.CIAgentRuntime{}
+		}
+		if host, other, ok := model.ParseAgentHost(value); ok {
+			answers.CIAgentRuntime.Host = host
+			answers.CIAgentRuntime.HostOther = other
+		} else {
+			answers.CIAgentRuntime.Host = value
+			answers.CIAgentRuntime.HostOther = ""
+		}
+	case "ci_agent_login":
+		if answers.CIAgentRuntime == nil {
+			answers.CIAgentRuntime = &model.CIAgentRuntime{}
+		}
+		if method, env, secret, reason, ok := model.ParseAgentLogin(value); ok {
+			answers.CIAgentRuntime.LoginMethod = method
+			answers.CIAgentRuntime.LoginEnvironment = env
+			answers.CIAgentRuntime.LoginSecret = secret
+			answers.CIAgentRuntime.LoginReason = reason
+		} else {
+			answers.CIAgentRuntime.LoginMethod = value
+			answers.CIAgentRuntime.LoginEnvironment = ""
+			answers.CIAgentRuntime.LoginSecret = ""
+			answers.CIAgentRuntime.LoginReason = ""
+		}
+	case "standardize_commits":
+		answers.StandardizeCommits = parseBoolPtr(value)
 	}
 	return answers
 }

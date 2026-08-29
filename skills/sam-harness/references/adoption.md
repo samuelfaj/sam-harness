@@ -45,6 +45,8 @@ Collect these fields in a temporary JSON file outside the repository:
 - `approvers`: one or more human owners.
 - `allow_ci_changes`: boolean.
 - `ci_providers`: `github`, `gitlab`, or both when CI changes are approved and the provider cannot be discovered.
+- `ci_agent_runtime`: required when CI changes are approved and a production, regulated, or enabled workflow will run agents. `host` is `claude-code`, `codex`, `grok`, or `other` with `host_other`. `login_method` is `api_key`, `oidc`, or `cli_token` plus `login_environment` and `login_secret` names; `github_app`; or `manual` with `login_reason`. Identifiers only, never values. Interactive answers may use `ci_agent_host` (`other:<name>`) and `ci_agent_login` (`api_key ENV SECRET`).
+- `standardize_commits`: boolean. When true, installed instructions require Conventional Commits (`feat:`, `fix:` for bugs, `docs:`, `test:`, `refactor:`, `chore:`, `ci:`).
 - `allowed_actions`: any explicit subset of `write_repository`, `network`, `commit`, `push`, `release`, and `deploy`.
 - `command_overrides`: argv arrays grouped by `<stack>:<path>` and gate when the user identifies authoritative commands.
 - `command_waivers`: a reason grouped by `<stack>:<path>` when the user explicitly accepts that no executable gate exists.
@@ -108,7 +110,7 @@ Generated secret-bearing jobs use a trusted released v0.2 CLI and pass `--config
 A legacy production or regulated configuration does not contain the required v0.2 workflow, CI secret decision, protected agent-environment/control-plane mappings, filesystem attestations, or trusted-external-command decisions. Collect the complete [workflow configuration](workflow-configuration.md), including provider bindings or explicit waivers, protected agent environments, control planes, verified reviewer/correction attestations, and any trusted config argv positions, in a temporary answers file outside the repository, then run:
 
 ```text
-sam-harness upgrade <root> --to 0.3.0 --answers <answers-file>
+sam-harness upgrade <root> --to 0.3.1 --answers <answers-file>
 ```
 
 Show unresolved decisions, every file operation, and the new plan ID. Apply only after the user approves that exact ID. If the repository fingerprint changes or the plan expires, discard it and create another upgrade plan.

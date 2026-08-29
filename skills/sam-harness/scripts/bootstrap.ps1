@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$SamHarnessVersion = if ($env:SAM_HARNESS_VERSION) { $env:SAM_HARNESS_VERSION } else { "0.3.0" }
+$SamHarnessVersion = if ($env:SAM_HARNESS_VERSION) { $env:SAM_HARNESS_VERSION } else { "0.3.1" }
 $SamHarnessRepository = if ($env:SAM_HARNESS_REPOSITORY) { $env:SAM_HARNESS_REPOSITORY } else { "samuelfaj/sam-harness" }
 $SamHarnessInstallDir = if ($env:SAM_HARNESS_INSTALL_DIR) { $env:SAM_HARNESS_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "sam-harness\bin" }
 

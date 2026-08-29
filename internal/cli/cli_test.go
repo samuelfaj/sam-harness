@@ -27,8 +27,8 @@ func TestVersionPrintsHarnessVersion(t *testing.T) {
 	if stdout.String() != want {
 		t.Fatalf("version = %q, want %q", stdout.String(), want)
 	}
-	if model.HarnessVersion != "0.3.0" {
-		t.Fatalf("HarnessVersion = %q, want 0.3.0 for this release", model.HarnessVersion)
+	if model.HarnessVersion != "0.3.1" {
+		t.Fatalf("HarnessVersion = %q, want 0.3.1 for this release", model.HarnessVersion)
 	}
 }
 
@@ -534,12 +534,20 @@ func TestUpgradeAcceptsCompleteAnswersForLegacyProductionConfig(t *testing.T) {
 	answers := answersFromConfig(legacy)
 	answers.Workflow = cliWorkflow(true)
 	answers.CISecretWaivers = map[string]string{"github": "fixture uses no external reviewer credentials"}
+	standardize := false
+	answers.StandardizeCommits = &standardize
+	answers.CIAgentRuntime = &model.CIAgentRuntime{
+		Host:        model.AgentHostOther,
+		HostOther:   "fixture",
+		LoginMethod: model.AgentLoginManual,
+		LoginReason: "fixture uses no external reviewer credentials",
+	}
 	answersPath := filepath.Join(root, "answers.json")
 	writeCLIJSON(t, answersPath, answers)
 	outputPath := filepath.Join(t.TempDir(), "upgrade-plan.json")
 	var stdout bytes.Buffer
 	command := New(&stdout, &bytes.Buffer{})
-	if err := command.Run([]string{"upgrade", root, "--to", "0.3.0", "--answers", answersPath, "--output", outputPath, "--format", "json"}); err != nil {
+	if err := command.Run([]string{"upgrade", root, "--to", "0.3.1", "--answers", answersPath, "--output", outputPath, "--format", "json"}); err != nil {
 		t.Fatalf("upgrade failed: %v\n%s", err, stdout.String())
 	}
 	var response struct {
@@ -580,7 +588,7 @@ func TestUpgradeHumanOutputNamesUnresolvedDecisions(t *testing.T) {
 
 	var stdout bytes.Buffer
 	command := New(&stdout, &bytes.Buffer{})
-	if err := command.Run([]string{"upgrade", root, "--to", "0.3.0", "--output", filepath.Join(t.TempDir(), "upgrade-plan.json")}); err != nil {
+	if err := command.Run([]string{"upgrade", root, "--to", "0.3.1", "--output", filepath.Join(t.TempDir(), "upgrade-plan.json")}); err != nil {
 		t.Fatalf("upgrade failed: %v\n%s", err, stdout.String())
 	}
 	for _, expected := range []string{"Unresolved decisions:", "workflow", "No repository files were planned. Collect answers and run upgrade again."} {
@@ -709,6 +717,7 @@ func baselineCLIAnswers(stack string) map[string]any {
 		"approvers":             []string{"owner"},
 		"allow_ci_changes":      false,
 		"allowed_actions":       []string{"write_repository"},
+		"standardize_commits":   false,
 	}
 	if stack == "typescript" {
 		answers["design_source_of_truth"] = "repository"

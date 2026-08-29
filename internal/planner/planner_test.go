@@ -757,9 +757,68 @@ func TestSaveRefusesExistingAndRepositoryPaths(t *testing.T) {
 	}
 }
 
+func TestManagedProductionPlanRequiresCIAgentHostAndLogin(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	answers.Workflow = completeWorkflow()
+	managed := true
+	answers.AllowCIChanges = &managed
+	answers.CIProviders = []string{"github"}
+	answers.CISecretWaivers = map[string]string{"github": "local reviewers"}
+	answers.CIAgentRuntime = nil
+	plan, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(plan.Unresolved, "ci_agent_host") || !contains(plan.Unresolved, "ci_agent_login") {
+		t.Fatalf("Unresolved = %v, want ci_agent_host and ci_agent_login", plan.Unresolved)
+	}
+	answers.CIAgentRuntime = &model.CIAgentRuntime{
+		Host:             model.AgentHostClaudeCode,
+		LoginMethod:      model.AgentLoginAPIKey,
+		LoginEnvironment: "ANTHROPIC_API_KEY",
+		LoginSecret:      "ANTHROPIC_API_KEY",
+	}
+	resolved, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(resolved.Unresolved, "ci_agent_host") || contains(resolved.Unresolved, "ci_agent_login") {
+		t.Fatalf("Unresolved = %v, agent runtime answers were ignored", resolved.Unresolved)
+	}
+}
+
+func TestCreateRejectsSecretLikeAgentLoginIdentifiers(t *testing.T) {
+	t.Parallel()
+	answers := completeAnswers()
+	answers.CIAgentRuntime = &model.CIAgentRuntime{
+		Host:             model.AgentHostCodex,
+		LoginMethod:      model.AgentLoginAPIKey,
+		LoginEnvironment: "OPENAI_API_KEY",
+		LoginSecret:      "sk-not-an-identifier",
+	}
+	if _, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileBaseline, answers); err == nil {
+		t.Fatal("Create() accepted a secret-like login identifier")
+	}
+}
+
+func TestMissingStandardizeCommitsStaysUnresolved(t *testing.T) {
+	t.Parallel()
+	answers := completeAnswers()
+	answers.StandardizeCommits = nil
+	plan, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileBaseline, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(plan.Unresolved, "standardize_commits") {
+		t.Fatalf("Unresolved = %v, want standardize_commits", plan.Unresolved)
+	}
+}
+
 func completeAnswers() model.Answers {
 	falsehood := false
 	allowCI := false
+	standardize := false
 	actions := []string{"write_repository"}
 	return model.Answers{
 		Criticality:         "low",
@@ -770,6 +829,13 @@ func completeAnswers() model.Answers {
 		Approvers:           []string{"owner"},
 		AllowCIChanges:      &allowCI,
 		AllowedActions:      &actions,
+		StandardizeCommits:  &standardize,
+		CIAgentRuntime: &model.CIAgentRuntime{
+			Host:        model.AgentHostOther,
+			HostOther:   "test",
+			LoginMethod: model.AgentLoginManual,
+			LoginReason: "tests use local reviewer argv",
+		},
 	}
 }
 

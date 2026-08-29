@@ -392,7 +392,14 @@ func productionAnswers() model.Answers {
 		ObservationWindow:     "24 hours",
 		RollbackOwner:         "release owner",
 		ProductionEnvironment: "production",
-		Workflow:              workflow,
+		StandardizeCommits:    &truth,
+		CIAgentRuntime: &model.CIAgentRuntime{
+			Host:             model.AgentHostCodex,
+			LoginMethod:      model.AgentLoginAPIKey,
+			LoginEnvironment: "REVIEW_ENV",
+			LoginSecret:      "OPENAI_API_KEY",
+		},
+		Workflow: workflow,
 	}
 }
 

@@ -98,6 +98,7 @@
             "gitlab": { "$ref": "#/$defs/gitlab_agent_control_plane" }
           }
         },
+        "agent_runtime": { "$ref": "#/$defs/ci_agent_runtime" },
         "gitlab_image": { "type": "string", "minLength": 1 }
       }
     },
@@ -387,7 +388,21 @@
         "command_waivers": {
           "type": "object",
           "additionalProperties": { "type": "string", "minLength": 1 }
-        }
+        },
+        "standardize_commits": { "type": "boolean" }
+      }
+    },
+    "ci_agent_runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "login_method"],
+      "properties": {
+        "host": { "enum": ["claude-code", "codex", "grok", "other"] },
+        "host_other": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
+        "login_method": { "enum": ["api_key", "github_app", "oidc", "cli_token", "manual"] },
+        "login_environment": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "login_secret": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "login_reason": { "type": "string", "minLength": 1 }
       }
     }
   }
