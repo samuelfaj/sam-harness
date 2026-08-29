@@ -17,6 +17,7 @@ import (
 
 	"github.com/samuelfaj/sam-harness/internal/apply"
 	"github.com/samuelfaj/sam-harness/internal/config"
+	"github.com/samuelfaj/sam-harness/internal/freeze"
 	"github.com/samuelfaj/sam-harness/internal/model"
 	"github.com/samuelfaj/sam-harness/internal/planner"
 	"github.com/samuelfaj/sam-harness/internal/repo"
@@ -40,7 +41,14 @@ const (
 	securityControl    = "guard:security"
 	securityScript     = ".sam-harness/guards/security.sh"
 	configRel          = ".sam-harness/config.yaml"
-	securityScriptBody = "#!/bin/sh\ntest -f go.mod -o -f package.json -o -f pyproject.toml -o -f Cargo.toml\n"
+	securityScriptBody = "#!/bin/sh\n" +
+		"pattern=$(printf '%s_|%s-|sk-|BEGIN %s|%s|xox' ghp glpat PRIVATE AKIA)\n" +
+		"if find . \\( -name .git -o -name node_modules -o -name vendor -o -name .sam-harness -o -name dist -o -name target \\) -prune -o -type f -exec grep -I -E -q \"$pattern\" {} \\; -print | grep -q .\n" +
+		"then\n" +
+		"  echo \"sam-harness: secret-like content found\" >&2\n" +
+		"  exit 1\n" +
+		"fi\n" +
+		"exit 0\n"
 )
 
 type Options struct {
@@ -125,6 +133,12 @@ func Run(opts Options) (Report, error) {
 	if strings.TrimSpace(opts.WaiverControl) != "" && (strings.TrimSpace(opts.WaiverRisk) == "" || strings.TrimSpace(opts.WaiverReason) == "") {
 		return report, fmt.Errorf("explicit risk and reason required")
 	}
+	if strings.TrimSpace(opts.WaiverControl) == "" && (strings.TrimSpace(opts.WaiverRisk) != "" || strings.TrimSpace(opts.WaiverReason) != "" || strings.TrimSpace(opts.WaiverOwner) != "") {
+		return report, fmt.Errorf("waiver-control is required")
+	}
+	if strings.TrimSpace(opts.AcceptPlanID) != "" && strings.TrimSpace(opts.WaiverControl) != "" {
+		return report, fmt.Errorf("waiver cannot be combined with apply of an accepted plan")
+	}
 	implement := strings.TrimSpace(opts.ImplementControl)
 	if implement != "" && opts.Mode != ModeGuided {
 		return report, fmt.Errorf("ImplementControl requires mode %s", ModeGuided)
@@ -175,7 +189,7 @@ func Run(opts Options) (Report, error) {
 		questions = questionsFor(locale, plan.Unresolved)
 	}
 
-	coverage := buildCoverage(scanResult, plan, answers)
+	coverage := applyWaiver(buildCoverage(scanResult, plan, answers), opts)
 	printProposal(stdout, plan, answers, coverage)
 	if opts.AnswersOutput != "" {
 		if err := writeAnswers(scanResult.Root, opts.AnswersOutput, answers); err != nil {
@@ -220,7 +234,7 @@ func Run(opts Options) (Report, error) {
 	if err != nil {
 		return report, err
 	}
-	report.Coverage = buildCoverage(scanResult, plan, answers)
+	report.Coverage = applyWaiver(buildCoverage(scanResult, plan, answers), opts)
 	report.FinishReport = finishReport(locale, configExists(plan.Root))
 	return report, nil
 }
@@ -402,21 +416,13 @@ func buildCoverage(scanResult model.ScanResult, plan model.Plan, answers model.A
 		harnessCoverage(root, cfgErr),
 		securityCoverage(root, cfg, cfgErr),
 		testCoverage(cfg, cfgErr),
-		{
-			ID:     "ci.provider",
-			State:  StateMissingImplementable,
-			Reason: "CI provider settings are not proven from local files",
-		},
+		ciProviderCoverage(scanResult),
 		{
 			ID:     "branch_protection",
 			State:  StateExternalProvider,
 			Reason: "branch protection must be read back from the provider",
 		},
-		{
-			ID:     "freeze",
-			State:  StateMissingImplementable,
-			Reason: "no freeze policy is installed",
-		},
+		freezeCoverage(root),
 	}
 	seen := map[string]bool{}
 	for _, item := range items {
@@ -469,7 +475,7 @@ func harnessCoverage(root string, cfgErr error) CoverageItem {
 func securityCoverage(root string, cfg model.Config, cfgErr error) CoverageItem {
 	script := filepath.Join(root, filepath.FromSlash(securityScript))
 	_, scriptErr := os.Stat(script)
-	if scriptErr == nil && cfgErr == nil && hasSecurityGate(cfg) && commandPasses(root, []string{"sh", securityScript}) {
+	if scriptErr == nil && cfgErr == nil && hasSecurityGate(cfg) && commandPasses(root, []string{"sh", securityScript}) && !secretLikePresent(root) {
 		return CoverageItem{
 			ID:     securityControl,
 			State:  StateExistingValidated,
@@ -502,6 +508,86 @@ func testCoverage(cfg model.Config, cfgErr error) CoverageItem {
 	}
 }
 
+func ciProviderCoverage(scanResult model.ScanResult) CoverageItem {
+	if len(scanResult.CIProviders) == 0 {
+		return CoverageItem{
+			ID:     "ci.provider",
+			State:  StateMissingImplementable,
+			Reason: "CI provider settings are not proven from local files",
+		}
+	}
+	return CoverageItem{
+		ID:     "ci.provider",
+		State:  StateExternalProvider,
+		Reason: "CI provider " + strings.Join(scanResult.CIProviders, ",") + " detected; remote readback is required",
+	}
+}
+
+func freezeCoverage(root string) CoverageItem {
+	path := filepath.Join(root, ".sam-harness", "freeze.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return CoverageItem{
+			ID:     "freeze",
+			State:  StateMissingImplementable,
+			Reason: "no freeze policy is installed",
+		}
+	}
+	var policy freeze.Policy
+	if err := json.Unmarshal(data, &policy); err != nil {
+		return CoverageItem{
+			ID:     "freeze",
+			State:  StateHumanDecisionRequired,
+			Reason: "freeze policy exists but is not valid JSON",
+		}
+	}
+	if strings.TrimSpace(policy.Owner) == "" || strings.TrimSpace(policy.Kind) == "" || len(policy.Branches) == 0 || len(policy.Environments) == 0 || len(policy.Exceptions) == 0 {
+		return CoverageItem{
+			ID:     "freeze",
+			State:  StateHumanDecisionRequired,
+			Reason: "freeze policy exists but is missing owner, kind, branches, environments, or exceptions",
+		}
+	}
+	if _, err := freeze.Active(policy, time.Date(2026, 12, 22, 12, 0, 0, 0, time.UTC)); err != nil {
+		return CoverageItem{
+			ID:     "freeze",
+			State:  StateHumanDecisionRequired,
+			Reason: "freeze policy exists but is not executable",
+		}
+	}
+	return CoverageItem{
+		ID:     "freeze",
+		State:  StateExistingValidated,
+		Reason: "freeze policy loaded and parsed",
+	}
+}
+
+func applyWaiver(items []CoverageItem, opts Options) []CoverageItem {
+	control := strings.TrimSpace(opts.WaiverControl)
+	if control == "" {
+		return items
+	}
+	owner := strings.TrimSpace(opts.WaiverOwner)
+	if owner == "" {
+		owner = "unspecified"
+	}
+	reason := fmt.Sprintf("explicit waiver: risk %s; %s; owner %s", strings.TrimSpace(opts.WaiverRisk), strings.TrimSpace(opts.WaiverReason), owner)
+	found := false
+	out := append([]CoverageItem(nil), items...)
+	for i, item := range out {
+		if item.ID == control {
+			out[i].State = StateHumanDecisionRequired
+			out[i].Reason = reason
+			found = true
+		}
+	}
+	if !found {
+		out = append(out, CoverageItem{ID: control, State: StateHumanDecisionRequired, Reason: reason})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
 func commandMentions(command []string, needle string) bool {
 	for _, argument := range command {
 		if argument == needle || strings.Contains(argument, needle) {
@@ -518,6 +604,45 @@ func commandPasses(root string, command []string) bool {
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir = root
 	return cmd.Run() == nil
+}
+
+func secretLikePresent(root string) bool {
+	skip := map[string]bool{
+		".git": true, "node_modules": true, "vendor": true, ".sam-harness": true,
+		"dist": true, "target": true, ".venv": true, "__pycache__": true,
+	}
+	found := false
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || found {
+			return err
+		}
+		if entry.IsDir() {
+			if path != root && skip[entry.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		if bytesContainSecret(data) {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
+}
+
+func bytesContainSecret(data []byte) bool {
+	text := string(data)
+	for _, marker := range []string{"ghp_", "glpat-", "AKIA", "xoxb-", "xoxp-", "BEGIN RSA PRIVATE", "BEGIN PRIVATE KEY", "BEGIN OPENSSH PRIVATE"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func questionsFor(locale string, unresolved []string) []Question {

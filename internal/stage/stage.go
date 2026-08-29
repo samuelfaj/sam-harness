@@ -366,6 +366,9 @@ func runRepair(req Request) (json.RawMessage, string, error) {
 func authorizeAction(action string, auth model.Authority) error {
 	switch strings.ToLower(strings.TrimSpace(action)) {
 	case "", "edit", "write":
+		if !auth.WriteRepository {
+			return fmt.Errorf("edit requires write_repository authority")
+		}
 		return nil
 	case "commit":
 		if !auth.Commit {
@@ -439,9 +442,9 @@ func collectContext(root string) (contextOutput, error) {
 			out.Evidence = append(out.Evidence, rel)
 		case isContract(rel):
 			out.Contracts = append(out.Contracts, rel)
-		case strings.HasSuffix(rel, "_test.go"):
+		case isTest(rel):
 			out.Tests = append(out.Tests, rel)
-		case strings.HasSuffix(rel, ".go"):
+		case isSource(rel):
 			out.Source = append(out.Source, rel)
 		}
 		return nil
@@ -462,11 +465,40 @@ func collectContext(root string) (contextOutput, error) {
 }
 
 func isInstruction(rel string) bool {
-	if filepath.ToSlash(filepath.Dir(rel)) != "." {
-		return false
-	}
 	switch filepath.Base(rel) {
 	case "AGENTS.md", "CLAUDE.md", "GEMINI.md":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSource(rel string) bool {
+	if isTest(rel) {
+		return false
+	}
+	switch strings.ToLower(filepath.Ext(rel)) {
+	case ".go", ".ts", ".tsx", ".js", ".jsx", ".py", ".rs":
+		return true
+	default:
+		return false
+	}
+}
+
+func isTest(rel string) bool {
+	base := strings.ToLower(filepath.Base(rel))
+	switch {
+	case strings.HasSuffix(base, "_test.go"):
+		return true
+	case strings.HasSuffix(base, "_test.py"), strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py"):
+		return true
+	case strings.Contains(base, ".test.") && (strings.HasSuffix(base, ".ts") || strings.HasSuffix(base, ".js") || strings.HasSuffix(base, ".tsx") || strings.HasSuffix(base, ".jsx")):
+		return true
+	case strings.Contains(base, ".spec.") && (strings.HasSuffix(base, ".ts") || strings.HasSuffix(base, ".js") || strings.HasSuffix(base, ".tsx") || strings.HasSuffix(base, ".jsx")):
+		return true
+	case strings.HasSuffix(base, "_test.rs"), strings.HasSuffix(base, "_test.ts"):
+		return true
+	case strings.Contains(filepath.ToSlash(rel), "/tests/") && strings.HasSuffix(base, ".rs"):
 		return true
 	default:
 		return false

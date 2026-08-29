@@ -270,6 +270,63 @@ func TestCoverageUsesOnlyFourStates(t *testing.T) {
 	}
 }
 
+func TestCoverageUsesDetectedCIAndInstalledFreeze(t *testing.T) {
+	t.Parallel()
+	root, tmp := copyFixture(t, "go")
+	if err := os.MkdirAll(filepath.Join(root, ".github", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".github", "workflows", "ci.yml"), []byte("name: ci\non: push\njobs: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".sam-harness"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	freezeJSON := []byte(`{"timezone":"UTC","start":"2026-12-20T00:00:00Z","end":"2026-12-27T00:00:00Z","branches":["main"],"environments":["production"],"owner":"release","kind":"production","exceptions":["P0"]}` + "\n")
+	if err := os.WriteFile(filepath.Join(root, ".sam-harness", "freeze.json"), freezeJSON, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	answersPath := filepath.Join(tmp, "answers.json")
+	writeBaselineAnswers(t, answersPath)
+	report, err := Run(Options{
+		Root:        root,
+		Mode:        ModeGuided,
+		AnswersPath: answersPath,
+		PlanOutput:  filepath.Join(tmp, "plan.json"),
+		Stdout:      io.Discard,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverageState(report.Coverage, "ci.provider") == StateMissingImplementable {
+		t.Fatalf("ci.provider = %q after detecting GitHub workflows, want not %s", coverageState(report.Coverage, "ci.provider"), StateMissingImplementable)
+	}
+	if coverageState(report.Coverage, "ci.provider") != StateExternalProvider {
+		t.Fatalf("ci.provider = %q, want %s", coverageState(report.Coverage, "ci.provider"), StateExternalProvider)
+	}
+	if coverageState(report.Coverage, "freeze") != StateExistingValidated {
+		t.Fatalf("freeze = %q, want %s with installed policy", coverageState(report.Coverage, "freeze"), StateExistingValidated)
+	}
+
+	incomplete := []byte(`{"timezone":"UTC","start":"2026-12-20T00:00:00Z","end":"2026-12-27T00:00:00Z"}` + "\n")
+	if err := os.WriteFile(filepath.Join(root, ".sam-harness", "freeze.json"), incomplete, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	incompleteReport, err := Run(Options{
+		Root:        root,
+		Mode:        ModeGuided,
+		AnswersPath: answersPath,
+		PlanOutput:  filepath.Join(tmp, "plan-incomplete-freeze.json"),
+		Stdout:      io.Discard,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverageState(incompleteReport.Coverage, "freeze") == StateExistingValidated {
+		t.Fatal("incomplete freeze policy was reported existing-and-validated")
+	}
+}
+
 func TestImplementGuardSecurityOnGoFixture(t *testing.T) {
 	t.Parallel()
 	root, tmp := copyFixture(t, "go")
@@ -374,6 +431,39 @@ func TestImplementGuardSecurityOnGoFixture(t *testing.T) {
 	if !bytes.Equal(gotUnrelated, unrelated) {
 		t.Fatalf("UNRELATED.txt mutated:\n%s", gotUnrelated)
 	}
+	if err := os.WriteFile(filepath.Join(root, "leaked.env"), []byte("TOKEN=ghp_exampletokenvalue0001\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	afterLeak, err := Run(Options{
+		Root:        root,
+		Mode:        ModeGuided,
+		AnswersPath: answersPath,
+		PlanOutput:  filepath.Join(tmp, "after-leak.json"),
+		Stdout:      io.Discard,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverageState(afterLeak.Coverage, "guard:security") == StateExistingValidated {
+		t.Fatal("guard:security stayed existing-and-validated after planted secret-like content")
+	}
+	legacy := []byte("#!/bin/sh\ntest -f go.mod -o -f package.json -o -f pyproject.toml -o -f Cargo.toml\n")
+	if err := os.WriteFile(filepath.Join(root, ".sam-harness", "guards", "security.sh"), legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacyReport, err := Run(Options{
+		Root:        root,
+		Mode:        ModeGuided,
+		AnswersPath: answersPath,
+		PlanOutput:  filepath.Join(tmp, "legacy-guard.json"),
+		Stdout:      io.Discard,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverageState(legacyReport.Coverage, "guard:security") == StateExistingValidated {
+		t.Fatal("legacy go.mod-only security script validated a tree with planted secret-like content")
+	}
 }
 
 func TestWaiverRequiresRiskAndReason(t *testing.T) {
@@ -399,6 +489,51 @@ func TestWaiverRequiresRiskAndReason(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "explicit risk and reason required") {
 		t.Fatalf("Run() error = %v, want explicit risk and reason required", err)
+	}
+
+	answersPath := filepath.Join(tmp, "answers.json")
+	writeBaselineAnswers(t, answersPath)
+	before, err := Run(Options{
+		Root:        root,
+		Mode:        ModeGuided,
+		AnswersPath: answersPath,
+		PlanOutput:  filepath.Join(tmp, "before-waiver.json"),
+		Stdout:      io.Discard,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverageState(before.Coverage, "guard:security") != StateMissingImplementable {
+		t.Fatalf("pre-waiver guard:security = %q, want %s", coverageState(before.Coverage, "guard:security"), StateMissingImplementable)
+	}
+	waived, err := Run(Options{
+		Root:          root,
+		Mode:          ModeGuided,
+		AnswersPath:   answersPath,
+		WaiverControl: "guard:security",
+		WaiverRisk:    "medium",
+		WaiverReason:  "fixture has no network or credential surface",
+		WaiverOwner:   "fixture-owner",
+		PlanOutput:    filepath.Join(tmp, "waived.json"),
+		Stdout:        io.Discard,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverageState(waived.Coverage, "guard:security") == StateMissingImplementable {
+		t.Fatal("complete waiver left guard:security missing-but-implementable")
+	}
+	if coverageState(waived.Coverage, "guard:security") != StateHumanDecisionRequired {
+		t.Fatalf("waived guard:security = %q, want %s", coverageState(waived.Coverage, "guard:security"), StateHumanDecisionRequired)
+	}
+	var waivedItem CoverageItem
+	for _, item := range waived.Coverage {
+		if item.ID == "guard:security" {
+			waivedItem = item
+		}
+	}
+	if !strings.Contains(waivedItem.Reason, "explicit waiver") || !strings.Contains(waivedItem.Reason, "fixture-owner") {
+		t.Fatalf("waiver reason = %q", waivedItem.Reason)
 	}
 }
 
