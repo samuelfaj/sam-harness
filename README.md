@@ -10,56 +10,28 @@ The method comes from Samuel Fajreldines's book [Development Harness](https://ww
 
 Read the book in your language: [🇺🇸 English](https://www.samuelfaj.com/books/development-harness-course/development-harness-course.en-US.html) · [🇧🇷 Português](https://www.samuelfaj.com/books/development-harness-course/development-harness-course.html) · [🇪🇸 Español](https://www.samuelfaj.com/books/development-harness-course/development-harness-course.es.html)
 
-## Install the skill
+## Install
 
-```bash
-npx skills add samuelfaj/sam-harness --skill sam-harness -g
-```
-
-Then open a repository and ask your agent:
-
-```text
-Apply sam-harness here.
-```
-
-Explicit invocation is more reliable when the agent supports it:
-
-```text
-Use $sam-harness and apply the harness to this repository.
-```
-
-```text
-/sam-harness apply
-```
-
-The skill asks before downloading the CLI. Its bootstrap scripts require Cosign and verify the signed release bundle and checksum before installing the binary in the user cache.
-
-The same request works in all supported languages:
-
-```text
-Apply sam-harness here.
-Aplique o sam-harness aqui.
-Aplica sam-harness aquí.
-```
-
-A repository URL is enough for Codex or Claude Code to discover the portable skill, the verified CLI, and the adoption contract. Prefer the installed `$sam-harness` skill when it is already present; otherwise follow the same guided CLI path. Do not download the CLI until the operator asks; then verify checksum, signature, and version.
+🇺🇸 English
 
 ```text
 Help me completely implement https://github.com/samuelfaj/sam-harness in this repository.
 Ask me what cannot be inferred, adapt it to this project, implement missing controls in approved stages, and finish with evidence.
 ```
 
+🇧🇷 Português
+
 ```text
 Me ajude a implementar aqui o https://github.com/samuelfaj/sam-harness
 Pergunte o que o repositório não prova, adapte ao projeto, implemente os controles que faltam em etapas aprovadas e termine com evidência.
 ```
 
+🇪🇸 Español
+
 ```text
 Ayúdame a implementar aquí https://github.com/samuelfaj/sam-harness
 Pregunta lo que el repositorio no demuestra, adáptalo al proyecto, implementa los controles que falten en etapas aprobadas y termina con evidencia.
 ```
-
-Those prompts run `sam-harness onboard`, `sam-harness adopt --auto`, or `sam-harness adopt --guided`. The agent asks only decisions the tree cannot prove, writes a reusable credential-free answers file, prints the plan ID, files, authority, and gates before any write, and applies only after `--accept` of that ID.
 
 ## What happens
 
