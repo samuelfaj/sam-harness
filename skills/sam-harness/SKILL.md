@@ -1,6 +1,6 @@
 ---
 name: sam-harness
-description: Adopt, operate, repair, audit, or upgrade the executable Sam Harness in a software repository. Use for equivalent English, Portuguese, or Spanish requests such as "Apply sam-harness here", "Aplique o sam-harness aqui", or "Aplica sam-harness aquí".
+description: Adopt, operate, repair, audit, or upgrade the executable Sam Harness in a software repository. Use for equivalent English, Portuguese, or Spanish requests such as "Apply sam-harness here", "Aplique o sam-harness aqui", "Aplica sam-harness aquí", or "help me implement https://github.com/samuelfaj/sam-harness".
 ---
 
 # Sam Harness
@@ -31,7 +31,8 @@ Turn the repository's real commands, architecture, delivery path, and risk into 
 
 ## Route the request
 
-- To install or change the harness, read [references/adoption.md](references/adoption.md). It covers discovery, decisions, planning, approval, application, and structural validation.
+- A request that only names https://github.com/samuelfaj/sam-harness, `$sam-harness`, `sam-harness onboard`, `adopt --auto`, or `adopt --guided` is an adoption request. Prefer this installed skill. Do not download the CLI until the operator asks; then use the bootstrap scripts so checksum, signature, and version are verified. Link-first and installed-skill paths must produce the same canonical plan for the same repository and answers.
+- To install or change the harness, read [references/adoption.md](references/adoption.md). It covers discovery, guided interview, coverage map, decisions, planning, approval, application, missing-control implementation, provider bootstrap, freeze checks, and structural validation.
 - To run a configured phase, the full lifecycle, or bounded correction, read [references/lifecycle.md](references/lifecycle.md).
 - When an installed repository contains local lifecycle skills, nested workspace instructions, or review templates, read [references/installed-agent-system.md](references/installed-agent-system.md) before selecting context or preparing a review.
 - To audit evidence or cross a remote, release, deployment, migration, security-sensitive, or delegated boundary, read [references/evidence-and-authority.md](references/evidence-and-authority.md).
@@ -39,9 +40,9 @@ Turn the repository's real commands, architecture, delivery path, and risk into 
 
 ## Equivalent invocations
 
-- English: `Use $sam-harness to apply the harness here.` or `Run the review phase with sam-harness.`
-- Português: `Use $sam-harness para aplicar o harness aqui.` or `Execute a fase de review com sam-harness.`
-- Español: `Usa $sam-harness para aplicar el harness aquí.` or `Ejecuta la fase de review con sam-harness.`
+- English: `Use $sam-harness to apply the harness here.` or `Help me completely implement https://github.com/samuelfaj/sam-harness in this repository.`
+- Português: `Use $sam-harness para aplicar o harness aqui.` or `Me ajude a implementar aqui o https://github.com/samuelfaj/sam-harness.`
+- Español: `Usa $sam-harness para aplicar el harness aquí.` or `Ayúdame a implementar aquí https://github.com/samuelfaj/sam-harness.`
 
 Follow the same discovery, approval, execution, and evidence boundaries in every language.
 

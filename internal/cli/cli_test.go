@@ -3,14 +3,304 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/samuelfaj/sam-harness/internal/bootstrap"
 	"github.com/samuelfaj/sam-harness/internal/config"
 	"github.com/samuelfaj/sam-harness/internal/model"
+	"github.com/samuelfaj/sam-harness/internal/repo"
 )
+
+func TestUsageDocumentsV03Commands(t *testing.T) {
+	t.Parallel()
+	var stdout bytes.Buffer
+	command := New(&stdout, &bytes.Buffer{})
+	if err := command.Run([]string{"help"}); err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"sam-harness onboard",
+		"sam-harness adopt [path] --auto|--guided",
+		"sam-harness bootstrap github|gitlab",
+		"sam-harness stage classifier|context|planning|implementation|review|repair",
+		"sam-harness freeze check",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("help omitted %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestStageCLIRunsClassifierFromInputFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("# fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := repo.Fingerprint(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputPath := filepath.Join(t.TempDir(), "stage-input.json")
+	writeCLIJSON(t, inputPath, map[string]any{
+		"stage":       "classifier",
+		"plan_id":     "cli-stage-plan",
+		"fingerprint": fingerprint,
+		"root":        root,
+		"authority": map[string]bool{
+			"write_repository": true, "network": false, "commit": false, "push": false, "release": false, "deploy": false,
+		},
+		"input": map[string]any{"paths": []string{"AGENTS.md"}},
+	})
+	var stdout bytes.Buffer
+	command := New(&stdout, &bytes.Buffer{})
+	if err := command.Run([]string{"stage", "classifier", "--input", inputPath, "--format", "json"}); err != nil {
+		t.Fatalf("stage CLI failed: %v\n%s", err, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"plan_id": "cli-stage-plan"`) || !strings.Contains(stdout.String(), `"proof": false`) {
+		t.Fatalf("stage output = %s", stdout.String())
+	}
+}
+
+func TestFreezeCLIBlocksOrdinaryFeatureInsideWindow(t *testing.T) {
+	policyPath := filepath.Join(t.TempDir(), "freeze.json")
+	writeCLIJSON(t, policyPath, map[string]any{
+		"timezone":   "UTC",
+		"start":      "2026-12-20T00:00:00Z",
+		"end":        "2026-12-27T00:00:00Z",
+		"branches":   []string{"main"},
+		"owner":      "release-owner",
+		"kind":       "production",
+		"exceptions": []string{"P0", "release-fix"},
+	})
+	var stdout bytes.Buffer
+	command := New(&stdout, &bytes.Buffer{})
+	err := command.Run([]string{
+		"freeze", "check",
+		"--policy", policyPath,
+		"--now", "2026-12-22T12:00:00Z",
+		"--head", "abc123",
+		"--kind", "feature",
+	})
+	if err == nil || !strings.Contains(err.Error(), "freeze") {
+		t.Fatalf("freeze CLI error = %v", err)
+	}
+}
+
+func TestOnboardAdoptAutoAndGuidedPrintPlanBeforeWrite(t *testing.T) {
+	stacks := []string{"go", "python", "rust", "typescript"}
+	commands := [][]string{
+		{"onboard"},
+		{"adopt", "--auto"},
+		{"adopt", "--guided"},
+	}
+	for _, stack := range stacks {
+		stack := stack
+		for _, argv := range commands {
+			argv := argv
+			t.Run(stack+"/"+strings.Join(argv, "_"), func(t *testing.T) {
+				root := copyCLIFixture(t, stack)
+				answersPath := filepath.Join(t.TempDir(), "answers.json")
+				writeCLIJSON(t, answersPath, baselineCLIAnswers(stack))
+				planOut := filepath.Join(t.TempDir(), "plan.json")
+				var stdout bytes.Buffer
+				command := New(&stdout, &bytes.Buffer{})
+				args := append(append([]string{}, argv...), root, "--answers", answersPath, "--output", planOut, "--answers-output", filepath.Join(t.TempDir(), "answers-out.json"))
+				if err := command.Run(args); err != nil {
+					t.Fatalf("%v failed: %v\n%s", argv, err, stdout.String())
+				}
+				if _, err := os.Stat(filepath.Join(root, ".sam-harness", "config.yaml")); !os.IsNotExist(err) {
+					t.Fatalf("repository changed before --accept: %v", err)
+				}
+				out := stdout.String()
+				if !strings.Contains(out, "Plan ID:") || !strings.Contains(out, "Operations:") {
+					t.Fatalf("missing plan-before-write output:\n%s", out)
+				}
+			})
+		}
+	}
+}
+
+func TestAdoptApplyThenIdempotentSecondApply(t *testing.T) {
+	root := copyCLIFixture(t, "go")
+	unrelated := filepath.Join(root, "UNRELATED.txt")
+	if err := os.WriteFile(unrelated, []byte("keep-me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	answersPath := filepath.Join(t.TempDir(), "answers.json")
+	writeCLIJSON(t, answersPath, baselineCLIAnswers("go"))
+	planOut := filepath.Join(t.TempDir(), "plan.json")
+	var stdout bytes.Buffer
+	command := New(&stdout, &bytes.Buffer{})
+	if err := command.Run([]string{"adopt", "--guided", root, "--answers", answersPath, "--output", planOut}); err != nil {
+		t.Fatalf("guided plan failed: %v\n%s", err, stdout.String())
+	}
+	planID := planIDFromOutput(t, stdout.String())
+	stdout.Reset()
+	if err := command.Run([]string{"adopt", "--guided", root, "--answers", answersPath, "--output", planOut, "--accept", planID}); err != nil {
+		t.Fatalf("guided apply failed: %v\n%s", err, stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, ".sam-harness", "config.yaml")); err != nil {
+		t.Fatalf("apply did not write config: %v", err)
+	}
+	got, err := os.ReadFile(unrelated)
+	if err != nil || string(got) != "keep-me\n" {
+		t.Fatalf("unrelated file mutated: %q err=%v", got, err)
+	}
+	stdout.Reset()
+	secondPlan := filepath.Join(t.TempDir(), "plan2.json")
+	if err := command.Run([]string{"adopt", "--guided", root, "--answers", answersPath, "--output", secondPlan}); err != nil {
+		t.Fatalf("second plan failed: %v\n%s", err, stdout.String())
+	}
+	secondID := planIDFromOutput(t, stdout.String())
+	if secondID == planID {
+		t.Fatal("second plan reused the stale plan ID")
+	}
+	stdout.Reset()
+	if err := command.Run([]string{"adopt", "--guided", root, "--answers", answersPath, "--output", secondPlan, "--accept", secondID}); err != nil {
+		t.Fatalf("second apply failed: %v\n%s", err, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "No files changed") {
+		t.Fatalf("second apply was not a no-op:\n%s", stdout.String())
+	}
+}
+
+func TestAdoptImplementSecurityGuardViaCLI(t *testing.T) {
+	root := copyCLIFixture(t, "go")
+	unrelated := filepath.Join(root, "UNRELATED.txt")
+	if err := os.WriteFile(unrelated, []byte("keep-me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	answersPath := filepath.Join(t.TempDir(), "answers.json")
+	writeCLIJSON(t, answersPath, baselineCLIAnswers("go"))
+	harnessPlan := filepath.Join(t.TempDir(), "harness.json")
+	var stdout bytes.Buffer
+	command := New(&stdout, &bytes.Buffer{})
+	if err := command.Run([]string{"adopt", "--guided", root, "--answers", answersPath, "--output", harnessPlan}); err != nil {
+		t.Fatal(err)
+	}
+	harnessID := planIDFromOutput(t, stdout.String())
+	stdout.Reset()
+	if err := command.Run([]string{"adopt", "--guided", root, "--answers", answersPath, "--output", harnessPlan, "--accept", harnessID}); err != nil {
+		t.Fatal(err)
+	}
+	taskPlan := filepath.Join(t.TempDir(), "security.json")
+	stdout.Reset()
+	if err := command.Run([]string{"adopt", "--guided", root, "--answers", answersPath, "--output", taskPlan, "--implement", "guard:security"}); err != nil {
+		t.Fatal(err)
+	}
+	taskID := planIDFromOutput(t, stdout.String())
+	if taskID == harnessID {
+		t.Fatal("bounded task reused the harness plan ID")
+	}
+	stdout.Reset()
+	if err := command.Run([]string{"adopt", "--guided", root, "--answers", answersPath, "--output", taskPlan, "--implement", "guard:security", "--accept", harnessID}); err == nil {
+		t.Fatal("stale harness plan ID was accepted for the bounded task")
+	}
+	stdout.Reset()
+	if err := command.Run([]string{"adopt", "--guided", root, "--answers", answersPath, "--output", taskPlan, "--implement", "guard:security", "--accept", taskID, "--format", "json"}); err != nil {
+		t.Fatalf("implement apply failed: %v\n%s", err, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"state": "existing-and-validated"`) || !strings.Contains(stdout.String(), "guard:security") {
+		t.Fatalf("coverage did not validate security guard:\n%s", stdout.String())
+	}
+	script := filepath.Join(root, ".sam-harness", "guards", "security.sh")
+	if info, err := os.Stat(script); err != nil || info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("security script missing or not executable: %v", err)
+	}
+	got, err := os.ReadFile(unrelated)
+	if err != nil || string(got) != "keep-me\n" {
+		t.Fatalf("unrelated file mutated: %q err=%v", got, err)
+	}
+}
+
+func TestBootstrapReadbackMismatchFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/cli-bootstrap-drift\n\ngo 1.27.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	command := New(&stdout, &bytes.Buffer{})
+	if err := command.Run([]string{"bootstrap", "github", root, "--format", "json"}); err != nil {
+		t.Fatal(err)
+	}
+	var plan bootstrap.Plan
+	if err := json.Unmarshal(stdout.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	command.BootstrapTransport = &scriptedTransport{reads: []bootstrap.RemoteState{{DefaultBranch: "main"}, {DefaultBranch: "main"}}}
+	stdout.Reset()
+	err := command.Run([]string{"bootstrap", "github", root, "--accept", plan.ID})
+	if err == nil || !strings.Contains(err.Error(), "readback mismatch") {
+		t.Fatalf("bootstrap mismatch error = %v", err)
+	}
+}
+
+func TestScanAndPlanDoNotWriteTrackedFiles(t *testing.T) {
+	root := copyCLIFixture(t, "go")
+	answersPath := filepath.Join(t.TempDir(), "answers.json")
+	writeCLIJSON(t, answersPath, baselineCLIAnswers("go"))
+	before := treeListing(t, root)
+	command := New(io.Discard, io.Discard)
+	if err := command.Run([]string{"scan", root}); err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Run([]string{"plan", root, "--answers", answersPath, "--output", filepath.Join(t.TempDir(), "plan.json")}); err != nil {
+		t.Fatal(err)
+	}
+	after := treeListing(t, root)
+	if before != after {
+		t.Fatalf("scan/plan mutated the tree\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+func TestBootstrapGitHubAndGitLabUseInjectedTransport(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/cli-bootstrap\n\ngo 1.27.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, provider := range []string{"github", "gitlab"} {
+		provider := provider
+		t.Run(provider, func(t *testing.T) {
+			var stdout bytes.Buffer
+			command := New(&stdout, &bytes.Buffer{})
+			if err := command.Run([]string{"bootstrap", provider, root, "--format", "json"}); err != nil {
+				t.Fatalf("bootstrap plan failed: %v\n%s", err, stdout.String())
+			}
+			if command.BootstrapTransport != nil {
+				t.Fatal("planning called the transport")
+			}
+			var plan bootstrap.Plan
+			if err := json.Unmarshal(stdout.Bytes(), &plan); err != nil {
+				t.Fatalf("plan JSON: %v\n%s", err, stdout.String())
+			}
+			if plan.ID == "" || len(plan.Mutations) == 0 {
+				t.Fatalf("empty bootstrap plan: %#v", plan)
+			}
+			transport := &scriptedTransport{reads: []bootstrap.RemoteState{{DefaultBranch: "main"}, plan.Desired}}
+			command.BootstrapTransport = transport
+			stdout.Reset()
+			if err := command.Run([]string{"bootstrap", provider, root, "--accept", plan.ID}); err != nil {
+				t.Fatalf("bootstrap apply failed: %v\n%s", err, stdout.String())
+			}
+			if len(transport.applied) != 1 {
+				t.Fatalf("Apply calls = %d, want 1", len(transport.applied))
+			}
+			stdout.Reset()
+			if err := command.Run([]string{"bootstrap", provider, root, "--accept", plan.ID}); err != nil {
+				t.Fatalf("idempotent bootstrap failed: %v\n%s", err, stdout.String())
+			}
+			if !strings.Contains(stdout.String(), "No provider mutations applied") {
+				t.Fatalf("second bootstrap was not idempotent:\n%s", stdout.String())
+			}
+		})
+	}
+}
 
 func TestAnswersFromConfigPreservesProductionUpgradeDecisions(t *testing.T) {
 	t.Parallel()
@@ -133,7 +423,7 @@ func TestUpgradeAcceptsCompleteAnswersForLegacyProductionConfig(t *testing.T) {
 	outputPath := filepath.Join(t.TempDir(), "upgrade-plan.json")
 	var stdout bytes.Buffer
 	command := New(&stdout, &bytes.Buffer{})
-	if err := command.Run([]string{"upgrade", root, "--to", "0.2.0", "--answers", answersPath, "--output", outputPath, "--format", "json"}); err != nil {
+	if err := command.Run([]string{"upgrade", root, "--to", "0.3.0", "--answers", answersPath, "--output", outputPath, "--format", "json"}); err != nil {
 		t.Fatalf("upgrade failed: %v\n%s", err, stdout.String())
 	}
 	var response struct {
@@ -174,7 +464,7 @@ func TestUpgradeHumanOutputNamesUnresolvedDecisions(t *testing.T) {
 
 	var stdout bytes.Buffer
 	command := New(&stdout, &bytes.Buffer{})
-	if err := command.Run([]string{"upgrade", root, "--to", "0.2.0", "--output", filepath.Join(t.TempDir(), "upgrade-plan.json")}); err != nil {
+	if err := command.Run([]string{"upgrade", root, "--to", "0.3.0", "--output", filepath.Join(t.TempDir(), "upgrade-plan.json")}); err != nil {
 		t.Fatalf("upgrade failed: %v\n%s", err, stdout.String())
 	}
 	for _, expected := range []string{"Unresolved decisions:", "workflow", "No repository files were planned. Collect answers and run upgrade again."} {
@@ -291,4 +581,111 @@ func writeCLIJSON(t *testing.T, path string, value any) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func baselineCLIAnswers(stack string) map[string]any {
+	answers := map[string]any{
+		"criticality":           "low",
+		"data_sensitivity":      "public",
+		"deploys_to_production": false,
+		"persistent_data":       false,
+		"irreversible_actions":  false,
+		"approvers":             []string{"owner"},
+		"allow_ci_changes":      false,
+		"allowed_actions":       []string{"write_repository"},
+	}
+	if stack == "typescript" {
+		answers["design_source_of_truth"] = "repository"
+	}
+	return answers
+}
+
+func copyCLIFixture(t *testing.T, name string) string {
+	t.Helper()
+	src := filepath.Join("..", "..", "testdata", "fixtures", name)
+	dst := t.TempDir()
+	err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode().Perm())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dst
+}
+
+func planIDFromOutput(t *testing.T, output string) string {
+	t.Helper()
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "Plan ID: ") {
+			id := strings.TrimSpace(strings.TrimPrefix(line, "Plan ID: "))
+			if id != "" {
+				return id
+			}
+		}
+	}
+	t.Fatalf("no Plan ID in output:\n%s", output)
+	return ""
+}
+
+func treeListing(t *testing.T, root string) string {
+	t.Helper()
+	var lines []string
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		lines = append(lines, rel)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(lines, "\n")
+}
+
+type scriptedTransport struct {
+	reads   []bootstrap.RemoteState
+	index   int
+	applied [][]bootstrap.Mutation
+}
+
+func (s *scriptedTransport) Read() (bootstrap.RemoteState, error) {
+	if len(s.reads) == 0 {
+		return bootstrap.RemoteState{}, nil
+	}
+	if s.index >= len(s.reads) {
+		return s.reads[len(s.reads)-1], nil
+	}
+	state := s.reads[s.index]
+	s.index++
+	return state, nil
+}
+
+func (s *scriptedTransport) Apply(mutations []bootstrap.Mutation) error {
+	cloned := append([]bootstrap.Mutation(nil), mutations...)
+	s.applied = append(s.applied, cloned)
+	return nil
 }

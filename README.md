@@ -42,6 +42,25 @@ Aplique o sam-harness aqui.
 Aplica sam-harness aquí.
 ```
 
+A repository URL is enough for Codex or Claude Code to discover the portable skill, the verified CLI, and the adoption contract. Prefer the installed `$sam-harness` skill when it is already present; otherwise follow the same guided CLI path. Do not download the CLI until the operator asks; then verify checksum, signature, and version.
+
+```text
+Help me completely implement https://github.com/samuelfaj/sam-harness in this repository.
+Ask me what cannot be inferred, adapt it to this project, implement missing controls in approved stages, and finish with evidence.
+```
+
+```text
+Me ajude a implementar aqui o https://github.com/samuelfaj/sam-harness
+Pergunte o que o repositório não prova, adapte ao projeto, implemente os controles que faltam em etapas aprovadas e termine com evidência.
+```
+
+```text
+Ayúdame a implementar aquí https://github.com/samuelfaj/sam-harness
+Pregunta lo que el repositorio no demuestra, adáptalo al proyecto, implementa los controles que falten en etapas aprobadas y termina con evidencia.
+```
+
+Those prompts run `sam-harness onboard`, `sam-harness adopt --auto`, or `sam-harness adopt --guided`. The agent asks only decisions the tree cannot prove, writes a reusable credential-free answers file, prints the plan ID, files, authority, and gates before any write, and applies only after `--accept` of that ID.
+
 ## What happens
 
 1. `scan` reads manifests, commands, workspaces, CI files, Git state, UI hints, persistence hints, and deployment files. It does not edit the repository.
@@ -61,6 +80,11 @@ Sam Harness preserves existing `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, Copilot in
 sam-harness scan [path] [--format human|json]
 sam-harness plan [path] --profile auto|baseline|production|regulated [--answers file]
 sam-harness apply --plan <file> --accept <plan-id>
+sam-harness onboard [path] [--answers file] [--answers-output file] [--locale en-US|pt-BR|es] [--accept plan-id] [--output file] [--format human|json] [--interactive true|false]
+sam-harness adopt [path] --auto|--guided [--answers file] [--answers-output file] [--locale en-US|pt-BR|es] [--accept plan-id] [--implement control] [--waiver-control id --waiver-risk text --waiver-reason text] [--output file] [--format human|json]
+sam-harness bootstrap github|gitlab [path] [--accept plan-id] [--format human|json]
+sam-harness stage classifier|context|planning|implementation|review|repair --input file [--format human|json]
+sam-harness freeze check [path] [--policy file] [--now rfc3339] [--exception file] [--head sha] [--base sha] [--branch name] [--kind feature] [--scheduled-release true|false]
 sam-harness check [path] [--format human|json] [--receipt true|false]
 sam-harness doctor [path]
 sam-harness upgrade [path] --to <version> [--answers <file>] [--output <file>]
@@ -123,7 +147,7 @@ If change-request publishing is enabled and separately authorized, CI sends that
 To upgrade a legacy production installation, provide the required v0.2 workflow decisions in an answers file:
 
 ```bash
-sam-harness upgrade /path/to/repository --to 0.2.0 --answers /tmp/sam-harness-v0.2-answers.json
+sam-harness upgrade /path/to/repository --to 0.3.0 --answers /tmp/sam-harness-v0.3-answers.json
 ```
 
 `upgrade` merges explicit answers over the installed configuration and produces an expiring plan; it does not apply it. Review unresolved decisions and every operation, then approve and apply the exact new plan ID. Use the [workflow configuration shape](skills/sam-harness/references/workflow-configuration.md) for the static/test guard coverage, provider secret-name, protected-agent-environment and agent-control-plane decisions, filesystem and trusted-command attestations, and lifecycle commands that legacy v0.1 production configuration does not contain.
