@@ -23,6 +23,7 @@ import (
 	"github.com/samuelfaj/sam-harness/internal/planner"
 	"github.com/samuelfaj/sam-harness/internal/scan"
 	"github.com/samuelfaj/sam-harness/internal/stage"
+	"github.com/samuelfaj/sam-harness/internal/status"
 )
 
 type CLI struct {
@@ -67,6 +68,8 @@ func (c *CLI) Run(args []string) error {
 		return c.stage(args[1:])
 	case "freeze":
 		return c.freeze(args[1:])
+	case "status":
+		return c.status(args[1:])
 	case "version", "--version", "-v":
 		fmt.Fprintf(c.Stdout, "sam-harness %s\n", model.HarnessVersion)
 		return nil
@@ -134,6 +137,24 @@ func (c *CLI) plan(args []string) error {
 		}{PlanFile: path, Plan: plan})
 	}
 	fmt.Fprintf(c.Stdout, "Plan ID: %s\nPlan file: %s\nRecommended profile: %s\nApplied profile: %s\n", plan.ID, path, plan.RecommendedProfile, plan.AppliedProfile)
+	if len(plan.ProposedGuardDefaults) > 0 {
+		fmt.Fprintln(c.Stdout, "Confirmable guard defaults from scan:")
+		categories := make([]string, 0, len(plan.ProposedGuardDefaults))
+		for category := range plan.ProposedGuardDefaults {
+			categories = append(categories, category)
+		}
+		sort.Strings(categories)
+		for _, category := range categories {
+			spec := plan.ProposedGuardDefaults[category]
+			fmt.Fprintf(c.Stdout, "  - %s: %s\n", category, strings.Join(spec.Command, " "))
+		}
+	}
+	if len(plan.Deferred) > 0 {
+		fmt.Fprintln(c.Stdout, "Deferred until a later adoption phase:")
+		for _, item := range plan.Deferred {
+			fmt.Fprintf(c.Stdout, "  - %s\n", item)
+		}
+	}
 	if len(plan.Unresolved) > 0 {
 		fmt.Fprintln(c.Stdout, "Unresolved decisions:")
 		for _, item := range plan.Unresolved {
@@ -219,7 +240,7 @@ func (c *CLI) check(args []string) error {
 }
 
 func (c *CLI) pipeline(args []string) error {
-	options, err := parseOptions(args, map[string]bool{"config": true, "format": true, "phase": true, "receipt": true, "review-base": true, "review-base-sha": true, "review-head-sha": true})
+	options, err := parseOptions(args, map[string]bool{"config": true, "format": true, "phase": true, "receipt": true, "review-base": true, "review-base-sha": true, "review-head-sha": true, "risk": true})
 	if err != nil {
 		return err
 	}
@@ -236,6 +257,7 @@ func (c *CLI) pipeline(args []string) error {
 		ReviewBase:    options.values["review-base"],
 		ReviewBaseSHA: options.values["review-base-sha"],
 		ReviewHeadSHA: options.values["review-head-sha"],
+		Risk:          options.values["risk"],
 	})
 	if options.value("format", "human") == "json" {
 		if err := writeJSON(c.Stdout, struct {
@@ -536,6 +558,32 @@ func (c *CLI) stage(args []string) error {
 	return nil
 }
 
+func (c *CLI) status(args []string) error {
+	options, err := parseOptions(args, map[string]bool{"format": true})
+	if err != nil {
+		return err
+	}
+	report, err := status.Evaluate(options.path())
+	if err != nil {
+		return err
+	}
+	if options.value("format", "human") == "json" {
+		return writeJSON(c.Stdout, report)
+	}
+	fmt.Fprintf(c.Stdout, "Repository: %s\nHEAD: %s\nFingerprint: %s\n", report.Root, valueOr(report.Head, "none"), report.Fingerprint)
+	for _, state := range report.States {
+		mark := "unproven"
+		if state.Proven {
+			mark = "proven"
+		}
+		fmt.Fprintf(c.Stdout, "%s: %s\n", state.Name, mark)
+		if !state.Proven && state.Reason != "" {
+			fmt.Fprintf(c.Stdout, "  %s\n", state.Reason)
+		}
+	}
+	return nil
+}
+
 func (c *CLI) freeze(args []string) error {
 	if len(args) == 0 || args[0] != "check" {
 		return errors.New("freeze check is required")
@@ -784,7 +832,15 @@ func answersFromConfig(cfg model.Config) model.Answers {
 		RollbackOwner:           cfg.Release.RollbackOwner,
 		ProductionEnvironment:   cfg.Release.ProductionEnvironment,
 		Workflow:                cloneWorkflow(cfg.Workflow),
+		AdoptionPhase:           workflowAdoptionPhase(cfg.Workflow),
 	}
+}
+
+func workflowAdoptionPhase(workflow *model.WorkflowConfig) string {
+	if workflow == nil {
+		return ""
+	}
+	return workflow.AdoptionPhase
 }
 
 func cloneWorkflow(workflow *model.WorkflowConfig) *model.WorkflowConfig {
@@ -906,6 +962,12 @@ func mergeAnswers(base, provided model.Answers) model.Answers {
 	if provided.Workflow != nil {
 		base.Workflow = cloneWorkflow(provided.Workflow)
 	}
+	if provided.AdoptionPhase != "" {
+		base.AdoptionPhase = provided.AdoptionPhase
+	}
+	if provided.ConfirmGuardDefaults != nil {
+		base.ConfirmGuardDefaults = append([]string(nil), provided.ConfirmGuardDefaults...)
+	}
 	if provided.CIAgentRuntime != nil {
 		base.CIAgentRuntime = provided.CIAgentRuntime.Clone()
 	}
@@ -1009,8 +1071,9 @@ Usage:
   sam-harness bootstrap gitlab [path] [--accept plan-id] [--format human|json]
   sam-harness stage classifier|context|planning|implementation|review|repair --input file [--format human|json]
   sam-harness freeze check [path] [--policy file] [--now rfc3339] [--exception file] [--head sha] [--base sha] [--branch name] [--kind feature] [--scheduled-release true|false]
+  sam-harness status [path] [--format human|json]
   sam-harness check [path] [--format human|json] [--receipt true|false]
-  sam-harness pipeline [path] [--config absolute-or-contained-file] [--review-base absolute-directory --review-base-sha hex --review-head-sha hex] --phase static|test|review|artifact|staging|production|observe|rollback|migration|all [--receipt true|false]
+  sam-harness pipeline [path] [--config absolute-or-contained-file] [--review-base absolute-directory --review-base-sha hex --review-head-sha hex] [--risk low|medium|high|critical] --phase static|test|review|artifact|staging|production|observe|rollback|migration|all [--receipt true|false]
   sam-harness repair [path] [--config absolute-or-contained-file] --receipt file [--receipt-output true|false]
   sam-harness doctor [path] [--format human|json]
   sam-harness upgrade [path] --to version [--answers file] [--output file]

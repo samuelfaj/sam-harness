@@ -104,6 +104,10 @@ Static categories: `format`, `lint`, `typecheck`, `architecture`, `security`, `d
 
 Test categories: `unit`, `integration`, `contract`, `business_invariants`, `property`, `mutation`, `e2e`, `performance`.
 
+`plan` may propose scan-detected stack commands as confirmable defaults for matching categories (`lint`/`typecheck`/`test`/`format`/`security`). Those defaults do not decide a category until `confirm_guard_defaults` lists it or the operator writes the command or waiver. Undetected categories stay empty; argv is never invented.
+
+Production and regulated adoption may set `adoption_phase` to `core` (local+CI+tests+review), `artifact`, or `delivery` (staging/production/observation). Later-phase slots stay unresolved for later phases and do not block the current phase’s plan. An empty current phase still blocks. Omit the field for full delivery completeness.
+
 Use a waiver only when an executable control genuinely does not apply or does not yet exist and the user accepts the gap. The receipt records it as skipped evidence; a waiver is not a passed check. Static and test phases also execute discovered repository gates.
 
 ## Reviewers and correction

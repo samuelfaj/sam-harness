@@ -59,6 +59,7 @@ sam-harness bootstrap github [path] [--accept plan-id] [--format human|json]
 sam-harness bootstrap gitlab [path] [--accept plan-id] [--format human|json]
 sam-harness stage classifier|context|planning|implementation|review|repair --input file [--format human|json]
 sam-harness freeze check [path] [--policy file] [--now rfc3339] [--exception file] [--head sha] [--base sha] [--branch name] [--kind feature] [--scheduled-release true|false]
+sam-harness status [path] [--format human|json]
 sam-harness check [path] [--format human|json] [--receipt true|false]
 sam-harness doctor [path]
 sam-harness upgrade [path] --to <version> [--answers <file>] [--output <file>]
@@ -121,7 +122,7 @@ If change-request publishing is enabled and separately authorized, CI sends that
 To upgrade a legacy production installation, provide the required v0.2 workflow decisions in an answers file:
 
 ```bash
-sam-harness upgrade /path/to/repository --to 0.3.1 --answers /tmp/sam-harness-v0.3-answers.json
+sam-harness upgrade /path/to/repository --to 0.4.0 --answers /tmp/sam-harness-v0.4-answers.json
 ```
 
 `upgrade` merges explicit answers over the installed configuration and produces an expiring plan; it does not apply it. Review unresolved decisions and every operation, then approve and apply the exact new plan ID. Use the [workflow configuration shape](skills/sam-harness/references/workflow-configuration.md) for the static/test guard coverage, provider secret-name, protected-agent-environment and agent-control-plane decisions, filesystem and trusted-command attestations, and lifecycle commands that legacy v0.1 production configuration does not contain.

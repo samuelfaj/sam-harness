@@ -313,9 +313,9 @@
     "workflow": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "static_guards", "test_guards", "reviewers", "correction", "artifact", "deployment", "migration", "release_schedule"],
       "properties": {
         "enabled": { "type": "boolean" },
+        "adoption_phase": { "enum": ["core", "artifact", "delivery"] },
         "static_guards": { "$ref": "#/$defs/guard_set" },
         "test_guards": { "$ref": "#/$defs/guard_set" },
         "reviewers": { "type": "array", "items": { "$ref": "#/$defs/reviewer" }, "minItems": 6, "maxItems": 6 },
@@ -324,7 +324,38 @@
         "deployment": { "$ref": "#/$defs/deployment_workflow" },
         "migration": { "type": "array", "items": { "$ref": "#/$defs/command_spec" }, "minItems": 1 },
         "release_schedule": { "$ref": "#/$defs/release_schedule" }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["adoption_phase"],
+            "properties": { "adoption_phase": { "const": "core" } }
+          },
+          "then": {
+            "required": ["enabled", "static_guards", "test_guards", "reviewers", "correction"]
+          }
+        },
+        {
+          "if": {
+            "required": ["adoption_phase"],
+            "properties": { "adoption_phase": { "const": "artifact" } }
+          },
+          "then": {
+            "required": ["enabled", "static_guards", "test_guards", "reviewers", "correction", "artifact"]
+          }
+        },
+        {
+          "if": {
+            "anyOf": [
+              { "not": { "required": ["adoption_phase"] } },
+              { "properties": { "adoption_phase": { "const": "delivery" } } }
+            ]
+          },
+          "then": {
+            "required": ["enabled", "static_guards", "test_guards", "reviewers", "correction", "artifact", "deployment", "migration", "release_schedule"]
+          }
+        }
+      ]
     },
     "authority": {
       "type": "object",
