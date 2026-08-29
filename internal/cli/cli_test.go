@@ -26,8 +26,10 @@ func TestUsageDocumentsV03Commands(t *testing.T) {
 	output := stdout.String()
 	for _, want := range []string{
 		"sam-harness onboard",
-		"sam-harness adopt [path] --auto|--guided",
-		"sam-harness bootstrap github|gitlab",
+		"sam-harness adopt --auto",
+		"sam-harness adopt --guided",
+		"sam-harness bootstrap github",
+		"sam-harness bootstrap gitlab",
 		"sam-harness stage classifier|context|planning|implementation|review|repair",
 		"sam-harness freeze check",
 	} {
@@ -90,10 +92,43 @@ func TestFreezeCLIBlocksOrdinaryFeatureInsideWindow(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "freeze") {
 		t.Fatalf("freeze CLI error = %v", err)
 	}
+	exceptionPath := filepath.Join(t.TempDir(), "exception.json")
+	writeCLIJSON(t, exceptionPath, map[string]any{
+		"class":         "P0",
+		"severity":      "critical",
+		"reference":     "INC-1",
+		"scope":         []string{"cmd/sam-harness"},
+		"rollback_plan": "revert abc123",
+		"approvers":     []string{"sre-oncall"},
+		"expires_at":    "2026-12-22T14:00:00Z",
+		"head_sha":      "abc123",
+		"approved_at":   "2026-12-22T11:00:00Z",
+	})
+	if err := command.Run([]string{
+		"freeze", "check",
+		"--policy", policyPath,
+		"--now", "2026-12-22T12:00:00Z",
+		"--head", "abc123",
+		"--branch", "main",
+		"--kind", "feature",
+		"--exception", exceptionPath,
+	}); err != nil {
+		t.Fatalf("freeze CLI rejected a complete exception: %v", err)
+	}
+	if err := command.Run([]string{
+		"freeze", "check",
+		"--policy", policyPath,
+		"--now", "2026-12-22T12:00:00Z",
+		"--head", "stale-head",
+		"--branch", "main",
+		"--exception", exceptionPath,
+	}); err == nil || !strings.Contains(err.Error(), "stale head") {
+		t.Fatalf("freeze CLI stale head error = %v", err)
+	}
 }
 
 func TestOnboardAdoptAutoAndGuidedPrintPlanBeforeWrite(t *testing.T) {
-	stacks := []string{"go", "python", "rust", "typescript"}
+	stacks := []string{"go", "python", "rust", "typescript", "full-flow"}
 	commands := [][]string{
 		{"onboard"},
 		{"adopt", "--auto"},
@@ -106,7 +141,11 @@ func TestOnboardAdoptAutoAndGuidedPrintPlanBeforeWrite(t *testing.T) {
 			t.Run(stack+"/"+strings.Join(argv, "_"), func(t *testing.T) {
 				root := copyCLIFixture(t, stack)
 				answersPath := filepath.Join(t.TempDir(), "answers.json")
-				writeCLIJSON(t, answersPath, baselineCLIAnswers(stack))
+				if stack == "full-flow" {
+					copyCLIFile(t, filepath.Join("..", "..", "testdata", "fixtures", "full-flow", "answers.production.json"), answersPath)
+				} else {
+					writeCLIJSON(t, answersPath, baselineCLIAnswers(stack))
+				}
 				planOut := filepath.Join(t.TempDir(), "plan.json")
 				var stdout bytes.Buffer
 				command := New(&stdout, &bytes.Buffer{})
@@ -118,8 +157,10 @@ func TestOnboardAdoptAutoAndGuidedPrintPlanBeforeWrite(t *testing.T) {
 					t.Fatalf("repository changed before --accept: %v", err)
 				}
 				out := stdout.String()
-				if !strings.Contains(out, "Plan ID:") || !strings.Contains(out, "Operations:") {
-					t.Fatalf("missing plan-before-write output:\n%s", out)
+				for _, want := range []string{"Plan ID:", "Operations:", "Authority:", "Gates:"} {
+					if !strings.Contains(out, want) {
+						t.Fatalf("missing plan-before-write %q:\n%s", want, out)
+					}
 				}
 			})
 		}
@@ -598,6 +639,17 @@ func baselineCLIAnswers(stack string) map[string]any {
 		answers["design_source_of_truth"] = "repository"
 	}
 	return answers
+}
+
+func copyCLIFile(t *testing.T, src, dst string) {
+	t.Helper()
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func copyCLIFixture(t *testing.T, name string) string {
