@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-var HarnessVersion = "0.3.0"
+var HarnessVersion = "0.3.1"
 
 const SchemaVersion = "1"
 
@@ -202,6 +202,8 @@ type Answers struct {
 	CISecretWaivers         map[string]string              `json:"ci_secret_waivers,omitempty"`
 	AgentSecretEnvironments map[string]string              `json:"agent_secret_environments,omitempty"`
 	AgentControlPlanes      map[string]AgentControlPlane   `json:"agent_control_planes,omitempty"`
+	CIAgentRuntime          *CIAgentRuntime                `json:"ci_agent_runtime,omitempty"`
+	StandardizeCommits      *bool                          `json:"standardize_commits,omitempty"`
 	GitLabImage             string                         `json:"gitlab_image,omitempty"`
 	RiskAcceptance          string                         `json:"risk_acceptance,omitempty"`
 	ObservationWindow       string                         `json:"observation_window,omitempty"`
@@ -235,6 +237,9 @@ func (a Answers) Missing(scan ScanResult) []string {
 	}
 	if a.AllowedActions == nil {
 		missing = append(missing, "allowed_actions")
+	}
+	if a.StandardizeCommits == nil {
+		missing = append(missing, "standardize_commits")
 	}
 	if len(a.Approvers) == 0 {
 		missing = append(missing, "approvers")
@@ -371,6 +376,7 @@ type CIConfig struct {
 	SecretWaivers            map[string]string            `json:"secret_waivers,omitempty" yaml:"secret_waivers,omitempty"`
 	AgentSecretEnvironments  map[string]string            `json:"agent_secret_environments,omitempty" yaml:"agent_secret_environments,omitempty"`
 	AgentControlPlanes       map[string]AgentControlPlane `json:"agent_control_planes,omitempty" yaml:"agent_control_planes,omitempty"`
+	AgentRuntime             *CIAgentRuntime              `json:"agent_runtime,omitempty" yaml:"agent_runtime,omitempty"`
 	GitLabImage              string                       `json:"gitlab_image,omitempty" yaml:"gitlab_image,omitempty"`
 }
 
@@ -400,11 +406,12 @@ type DesignConfig struct {
 }
 
 type GovernanceConfig struct {
-	Approvers       []string          `json:"approvers" yaml:"approvers"`
-	Criticality     string            `json:"criticality" yaml:"criticality"`
-	DataSensitivity string            `json:"data_sensitivity" yaml:"data_sensitivity"`
-	RiskAcceptance  string            `json:"risk_acceptance,omitempty" yaml:"risk_acceptance,omitempty"`
-	CommandWaivers  map[string]string `json:"command_waivers,omitempty" yaml:"command_waivers,omitempty"`
+	Approvers          []string          `json:"approvers" yaml:"approvers"`
+	Criticality        string            `json:"criticality" yaml:"criticality"`
+	DataSensitivity    string            `json:"data_sensitivity" yaml:"data_sensitivity"`
+	RiskAcceptance     string            `json:"risk_acceptance,omitempty" yaml:"risk_acceptance,omitempty"`
+	CommandWaivers     map[string]string `json:"command_waivers,omitempty" yaml:"command_waivers,omitempty"`
+	StandardizeCommits *bool             `json:"standardize_commits,omitempty" yaml:"standardize_commits,omitempty"`
 }
 
 type Config struct {

@@ -7,6 +7,13 @@
   "approvers": ["fixture-release-owner", "fixture-security-owner"],
   "allow_ci_changes": true,
   "ci_providers": ["github", "gitlab"],
+  "standardize_commits": false,
+  "ci_agent_runtime": {
+    "host": "other",
+    "host_other": "fixture",
+    "login_method": "manual",
+    "login_reason": "The synthetic fixture uses a deterministic local reviewer and correction command with no external credentials."
+  },
   "allowed_actions": ["write_repository", "network", "commit", "push", "release", "deploy"],
   "ci_setup_commands": {
     "github": [{"workdir": ".", "command": ["go", "version"]}],

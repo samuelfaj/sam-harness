@@ -776,6 +776,8 @@ func answersFromConfig(cfg model.Config) model.Answers {
 		CISecretWaivers:         cloneStringMap(cfg.CI.SecretWaivers),
 		AgentSecretEnvironments: cloneStringMap(cfg.CI.AgentSecretEnvironments),
 		AgentControlPlanes:      cloneAgentControlPlanes(cfg.CI.AgentControlPlanes),
+		CIAgentRuntime:          cfg.CI.AgentRuntime.Clone(),
+		StandardizeCommits:      cfg.Governance.StandardizeCommits,
 		GitLabImage:             cfg.CI.GitLabImage,
 		RiskAcceptance:          cfg.Governance.RiskAcceptance,
 		ObservationWindow:       cfg.Release.ObservationWindow,
@@ -903,6 +905,12 @@ func mergeAnswers(base, provided model.Answers) model.Answers {
 	}
 	if provided.Workflow != nil {
 		base.Workflow = cloneWorkflow(provided.Workflow)
+	}
+	if provided.CIAgentRuntime != nil {
+		base.CIAgentRuntime = provided.CIAgentRuntime.Clone()
+	}
+	if provided.StandardizeCommits != nil {
+		base.StandardizeCommits = provided.StandardizeCommits
 	}
 	return base
 }

@@ -240,6 +240,9 @@ func validateCISecretDecisions(ci model.CIConfig, providers map[string]bool) err
 	if err := ValidateCIAgentControlPlanes(ci.AgentControlPlanes); err != nil {
 		return err
 	}
+	if err := ValidateCIAgentRuntime(ci.AgentRuntime); err != nil {
+		return err
+	}
 	for provider := range ci.SecretBindings {
 		if !providers[provider] {
 			return fmt.Errorf("CI secret bindings do not match provider %q", provider)
@@ -273,6 +276,25 @@ func ValidateCIAgentSecretEnvironments(environments map[string]string) error {
 		if !ciAgentEnvironmentPattern.MatchString(environment) {
 			return fmt.Errorf("CI agent secret provider %q has unsafe environment name %q", provider, environment)
 		}
+	}
+	return nil
+}
+
+// ValidateCIAgentRuntime validates the chosen CI agent host and login
+// identifiers. Nil is allowed; present values must be complete and must not
+// contain credential material.
+func ValidateCIAgentRuntime(runtime *model.CIAgentRuntime) error {
+	if runtime == nil {
+		return nil
+	}
+	if err := runtime.Validate(); err != nil {
+		return fmt.Errorf("CI agent runtime: %w", err)
+	}
+	if runtime.Host != "" && !runtime.HostComplete() {
+		return fmt.Errorf("CI agent runtime host is incomplete")
+	}
+	if runtime.LoginMethod != "" && !runtime.LoginComplete() {
+		return fmt.Errorf("CI agent runtime login is incomplete")
 	}
 	return nil
 }

@@ -537,6 +537,26 @@ func TestWaiverRequiresRiskAndReason(t *testing.T) {
 	}
 }
 
+func TestSetAnswerFieldRecordsAgentHostLoginAndCommitConvention(t *testing.T) {
+	t.Parallel()
+	answers := setAnswerField(model.Answers{}, "ci_agent_host", "claude-code")
+	answers = setAnswerField(answers, "ci_agent_login", "api_key ANTHROPIC_API_KEY ANTHROPIC_API_KEY")
+	answers = setAnswerField(answers, "standardize_commits", "true")
+	if answers.CIAgentRuntime == nil || answers.CIAgentRuntime.Host != model.AgentHostClaudeCode {
+		t.Fatalf("agent host = %#v", answers.CIAgentRuntime)
+	}
+	if answers.CIAgentRuntime.LoginMethod != model.AgentLoginAPIKey || answers.CIAgentRuntime.LoginEnvironment != "ANTHROPIC_API_KEY" || answers.CIAgentRuntime.LoginSecret != "ANTHROPIC_API_KEY" {
+		t.Fatalf("agent login = %#v", answers.CIAgentRuntime)
+	}
+	other := setAnswerField(model.Answers{}, "ci_agent_host", "other:cursor")
+	if other.CIAgentRuntime.Host != model.AgentHostOther || other.CIAgentRuntime.HostOther != "cursor" {
+		t.Fatalf("other host = %#v", other.CIAgentRuntime)
+	}
+	if answers.StandardizeCommits == nil || !*answers.StandardizeCommits {
+		t.Fatalf("standardize_commits = %#v", answers.StandardizeCommits)
+	}
+}
+
 func TestResumeDoesNotReaskCompletedIDs(t *testing.T) {
 	t.Parallel()
 	root, tmp := copyFixture(t, "go")
@@ -585,6 +605,9 @@ func TestTLocales(t *testing.T) {
 		"question.deploys_to_production", "impact.deploys_to_production", "default.deploys_to_production",
 		"question.approvers", "impact.approvers", "default.approvers",
 		"question.allowed_actions", "impact.allowed_actions", "default.allowed_actions",
+		"question.ci_agent_host", "impact.ci_agent_host",
+		"question.ci_agent_login", "impact.ci_agent_login",
+		"question.standardize_commits", "impact.standardize_commits", "default.standardize_commits",
 		"finish.source", "finish.local_checks", "finish.remote", "finish.ci", "finish.artifact",
 		"finish.deployment", "finish.live_observation", "finish.freeze", "finish.production_stability",
 	}
@@ -671,6 +694,7 @@ func baselineAnswers() model.Answers {
 		Approvers:           []string{"owner"},
 		AllowCIChanges:      &falsehood,
 		AllowedActions:      &actions,
+		StandardizeCommits:  &falsehood,
 	}
 }
 

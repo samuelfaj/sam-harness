@@ -40,6 +40,9 @@ func Build(scan model.ScanResult, profile model.Profile, answers model.Answers) 
 		".sam-harness/runbooks/observability.md": observabilityRunbook(cfg),
 		".sam-harness/runbooks/retirement.md":    retirementRunbook(cfg),
 	}
+	if cfg.Governance.StandardizeCommits != nil && *cfg.Governance.StandardizeCommits {
+		files[".sam-harness/COMMIT.md"] = commitConventionDocument()
+	}
 	for _, lifecycle := range []string{"classify", "context", "plan", "implement", "review", "repair", "release"} {
 		path := ".agents/skills/sam-harness-" + lifecycle + "/SKILL.md"
 		files[path] = localSkillDocument(lifecycle)
@@ -211,6 +214,7 @@ func buildConfig(scan model.ScanResult, profile model.Profile, answers model.Ans
 			SecretWaivers:            cloneWaivers(answers.CISecretWaivers),
 			AgentSecretEnvironments:  cloneWaivers(answers.AgentSecretEnvironments),
 			AgentControlPlanes:       cloneAgentControlPlanes(answers.AgentControlPlanes),
+			AgentRuntime:             agentRuntimeForConfig(answers),
 			GitLabImage:              answers.GitLabImage,
 		},
 		Release: model.ReleaseConfig{
@@ -236,11 +240,12 @@ func buildConfig(scan model.ScanResult, profile model.Profile, answers model.Ans
 			Localization:  scan.HasUI,
 		},
 		Governance: model.GovernanceConfig{
-			Approvers:       answers.Approvers,
-			Criticality:     answers.Criticality,
-			DataSensitivity: answers.DataSensitivity,
-			RiskAcceptance:  answers.RiskAcceptance,
-			CommandWaivers:  cloneWaivers(answers.CommandWaivers),
+			Approvers:          answers.Approvers,
+			Criticality:        answers.Criticality,
+			DataSensitivity:    answers.DataSensitivity,
+			StandardizeCommits: answers.StandardizeCommits,
+			RiskAcceptance:     answers.RiskAcceptance,
+			CommandWaivers:     cloneWaivers(answers.CommandWaivers),
 		},
 		Workflow: cloneWorkflow(answers.Workflow),
 		Metadata: map[string]string{
@@ -467,7 +472,57 @@ Read these files before changing code:
 - [.sam-harness/DELEGATION.md](.sam-harness/DELEGATION.md) before delegating or crossing a permission boundary.
 - [.sam-harness/UX_GATES.md](.sam-harness/UX_GATES.md) for user-facing work.
 
-Do not treat an edit, test, commit, push, review, CI run, artifact, deployment, or live observation as the same state. Report each state only with its own evidence. Preserve unrelated work. Do not commit, push, release, deploy, alter credentials, or perform an irreversible operation unless the user has granted that exact authority.`, cfg.HarnessVersion, cfg.Profile)
+Pull and merge request descriptions must follow the managed GitHub and GitLab templates: Description, Type of Change, Behavior, Business Rules, Validation, Tests, and the Sam Harness evidence ladder. Use Not applicable or Not verified instead of filling gaps.
+
+Do not treat an edit, test, commit, push, review, CI run, artifact, deployment, or live observation as the same state. Report each state only with its own evidence. Preserve unrelated work. Do not commit, push, release, deploy, alter credentials, or perform an irreversible operation unless the user has granted that exact authority.
+%s%s`, cfg.HarnessVersion, cfg.Profile, agentsCommitConvention(cfg), agentsCIAgentRuntime(cfg))
+}
+
+func agentsCommitConvention(cfg model.Config) string {
+	if cfg.Governance.StandardizeCommits == nil || !*cfg.Governance.StandardizeCommits {
+		return ""
+	}
+	return `
+When the user has granted commit authority, write commit subjects in Conventional Commits form: ` + "`feat:`" + `, ` + "`fix:`" + ` (bugs), ` + "`docs:`" + `, ` + "`test:`" + `, ` + "`refactor:`" + `, ` + "`perf:`" + `, ` + "`chore:`" + `, ` + "`ci:`" + `, ` + "`build:`" + `, or ` + "`revert:`" + `. Read [.sam-harness/COMMIT.md](.sam-harness/COMMIT.md).
+`
+}
+
+func agentsCIAgentRuntime(cfg model.Config) string {
+	runtime := cfg.CI.AgentRuntime
+	if runtime == nil || runtime.Host == "" {
+		return ""
+	}
+	host := runtime.Host
+	if runtime.Host == model.AgentHostOther {
+		host = runtime.Host + ":" + runtime.HostOther
+	}
+	login := runtime.LoginMethod
+	switch runtime.LoginMethod {
+	case model.AgentLoginAPIKey, model.AgentLoginOIDC, model.AgentLoginCLIToken:
+		login = runtime.LoginMethod + " environment " + runtime.LoginEnvironment + " from provider secret " + runtime.LoginSecret
+	case model.AgentLoginManual:
+		login = "manual (" + runtime.LoginReason + ")"
+	}
+	return fmt.Sprintf(`
+CI agents are run by %s. Login is %s. Store only the named secret in the protected agent environment; never write credential values into the repository, answers, or receipts.
+`, host, login)
+}
+
+func commitConventionDocument() string {
+	return "# Commit messages\n\n" +
+		"When commit authority is granted, use Conventional Commits:\n\n" +
+		"```text\n" +
+		"<type>(optional-scope): short summary\n" +
+		"```\n\n" +
+		"Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert.\n\n" +
+		"Bugs use fix, not a separate bug type. Do not invent extra types. Do not put secret values in the subject or body.\n"
+}
+
+func agentRuntimeForConfig(answers model.Answers) *model.CIAgentRuntime {
+	if answers.AllowCIChanges == nil || !*answers.AllowCIChanges {
+		return nil
+	}
+	return answers.CIAgentRuntime.Clone()
 }
 
 func adapterBlock(agent string) string {
@@ -504,7 +559,84 @@ This managed block applies to the workspace at %s. Follow the root AGENTS.md and
 }
 
 func reviewTemplateBlock(kind string) string {
-	return fmt.Sprintf(`## Sam Harness %s evidence
+	return fmt.Sprintf(`## Description
+
+In two to four sentences, explain the problem, the outcome, and why it matters.
+Lead with behavior and value, not files or implementation details.
+
+## Type of Change
+
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Refactor
+- [ ] Documentation
+- [ ] Other: <specific type>
+
+## What Changed
+
+- User-visible change: concise outcome or `+"`None`"+`.
+- Internal change: concise implementation summary or `+"`None`"+`.
+
+## Behavior
+
+- Before: previous observable behavior.
+- After: new observable behavior.
+- Unchanged: important behavior intentionally preserved.
+
+## Business Rules
+
+- Added: new rule or `+"`None`"+`.
+- Changed: changed rule or `+"`None`"+`.
+- Preserved: rule that must continue to hold.
+- Write rules as conditions and outcomes: “When X, the system must Y.”
+
+## Scope and Impact
+
+- In scope: changed components and paths, including every changed file.
+- Out of scope: nearby behavior intentionally not changed.
+- User impact: who is affected and how, or `+"`None`"+`.
+- Technical impact: API, data, configuration, operations, or compatibility, or `+"`None`"+`.
+
+## Risks and Mitigations
+
+- Risk: concrete failure mode and affected users or systems.
+- Mitigation: prevention, detection, containment, or `+"`None`"+`.
+- Remaining risk: what is still uncertain, or `+"`None known`"+`.
+- Use `+"`Not verified`"+` when evidence is unavailable.
+
+## Rollout and Recovery
+
+- Rollout: deployment, migration, feature flag, or `+"`Not applicable`"+`.
+- Monitoring: signal that confirms healthy behavior, or `+"`Not applicable`"+`.
+- Recovery: rollback or corrective action if the change fails, or `+"`Not applicable`"+`.
+
+## Validation
+
+- `+"`<command>`"+` — `+"`PASS`"+`, `+"`FAIL`"+`, or `+"`NOT RUN`"+`: concise result or reason.
+
+## Tests
+
+- Scenarios: business and technical behavior covered, or `+"`None`"+`.
+- Added or updated: exact test paths, or `+"`None`"+`.
+- Executed: exact commands and status, or `+"`Not run`"+`.
+
+## Author Checklist
+
+- [ ] Description explains the problem, outcome, and reason.
+- [ ] Before/after behavior and business rules are explicit.
+- [ ] Every changed file is represented in scope.
+- [ ] Risks, mitigations, and recovery are documented.
+- [ ] Tests and validation reflect commands actually run.
+- [ ] No unrelated changes are included.
+
+## Notes for Reviewer
+
+- Review first: highest-risk rule, behavior, or file.
+- Open questions: unresolved decision or `+"`None`"+`.
+
+Use `+"`Not applicable`"+` or `+"`Not verified`"+` instead of filling evidence gaps. Mark a checkbox only when its claim has evidence.
+
+## Sam Harness %s evidence
 
 Do not mark an item complete without a receipt tied to this exact change.
 
@@ -628,6 +760,20 @@ func workflowDocument(cfg model.Config) string {
 	builder.WriteString(fmt.Sprintf("Release schedule: `%s` in IANA timezone `%s`. GitHub cron is evaluated in UTC; translate and verify the configured local schedule before enabling it. GitLab schedules are provider-side and require remote configuration plus readback.\n\n", cfg.Workflow.ReleaseSchedule.Cron, cfg.Workflow.ReleaseSchedule.Timezone))
 	builder.WriteString("## Provider-side controls\n\n")
 	builder.WriteString("The six-role review is a pre-merge required-status gate. GitHub branch protection, the configured GitHub App check, merge queue rules, GitLab external status checks, protected branches, merge-request approvals, and protected production environments are provider-side controls. Generated files declare local boundaries only; read every remote rule and required check back before claiming it is active.\n\n")
+	if runtime := cfg.CI.AgentRuntime; runtime != nil && runtime.HostComplete() {
+		host := runtime.Host
+		if runtime.Host == model.AgentHostOther {
+			host = runtime.Host + ":" + runtime.HostOther
+		}
+		builder.WriteString(fmt.Sprintf("CI agent host: `%s`. Login method: `%s`.", host, runtime.LoginMethod))
+		switch runtime.LoginMethod {
+		case model.AgentLoginAPIKey, model.AgentLoginOIDC, model.AgentLoginCLIToken:
+			builder.WriteString(fmt.Sprintf(" Bind environment `%s` from provider secret `%s` in the protected agent environment.", runtime.LoginEnvironment, runtime.LoginSecret))
+		case model.AgentLoginManual:
+			builder.WriteString(" " + runtime.LoginReason)
+		}
+		builder.WriteString(" These are identifiers only. Do not write credential values into generated files. This host is distinct from the GitHub App or GitLab external project that publishes the required check.\n\n")
+	}
 	builder.WriteString("Trusted review uses the pinned released harness, trusted base configuration, explicit `--review-base`, `--review-base-sha`, and `--review-head-sha`; its receipt binds the exact provider SHAs, fingerprints, patch, and SHA-256. Missing trusted control-plane inputs or credentials fails closed.\n\n")
 	for _, provider := range cfg.CI.Providers {
 		bindings := cfg.CI.SecretBindings[provider]
@@ -2386,6 +2532,13 @@ func answersExample() string {
   "approvers": ["engineering-owner"],
   "allow_ci_changes": true,
   "ci_providers": ["github"],
+  "ci_agent_runtime": {
+    "host": "codex",
+    "login_method": "api_key",
+    "login_environment": "OPENAI_API_KEY",
+    "login_secret": "OPENAI_API_KEY"
+  },
+  "standardize_commits": false,
   "allowed_actions": ["write_repository"],
   "command_overrides": {},
   "command_waivers": {},
