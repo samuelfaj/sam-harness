@@ -40,6 +40,10 @@ func Create(scan model.ScanResult, requested model.Profile, answers model.Answer
 	if err := validateAnswers(answers); err != nil {
 		return model.Plan{}, err
 	}
+	answers.Workflow = cloneWorkflowConfig(answers.Workflow)
+	if answers.Workflow != nil && strings.TrimSpace(answers.Workflow.AdoptionPhase) == "" && strings.TrimSpace(answers.AdoptionPhase) != "" {
+		answers.Workflow.AdoptionPhase = answers.AdoptionPhase
+	}
 	resolvedScan, commandQuestions, err := resolveCommands(scan, answers)
 	if err != nil {
 		return model.Plan{}, err
@@ -77,6 +81,10 @@ func Create(scan model.ScanResult, requested model.Profile, answers model.Answer
 	if requested == model.ProfileAuto {
 		applied = recommended
 	}
+	proposedDefaults := ProposedGuardDefaults(resolvedScan)
+	if err := applyConfirmedGuardDefaults(answers.Workflow, proposedDefaults, answers.ConfirmGuardDefaults); err != nil {
+		return model.Plan{}, err
+	}
 	unresolved := answers.Missing(scan)
 	if unresolved == nil {
 		unresolved = []string{}
@@ -96,7 +104,10 @@ func Create(scan model.ScanResult, requested model.Profile, answers model.Answer
 	workflowRequired := profileRank(applied) >= profileRank(model.ProfileProduction)
 	workflowQuestions := missingWorkflowAnswers(answers.Workflow, workflowRequired || (answers.Workflow != nil && answers.Workflow.Enabled), workflowRequired)
 	unresolved = append(unresolved, workflowQuestions...)
-	if len(workflowQuestions) == 0 && answers.Workflow != nil && answers.Workflow.Enabled {
+	phase := adoptionPhaseFrom(answers)
+	blocking, deferred := splitWorkflowAnswers(unresolved, phase)
+	unresolved = blocking
+	if !hasWorkflowPrefix(unresolved) && answers.Workflow != nil && answers.Workflow.Enabled {
 		if err := config.ValidateWorkflow(answers.Workflow, workflowRequired); err != nil {
 			return model.Plan{}, fmt.Errorf("workflow: %w", err)
 		}
@@ -105,7 +116,7 @@ func Create(scan model.ScanResult, requested model.Profile, answers model.Answer
 	if answers.AllowCIChanges != nil && *answers.AllowCIChanges {
 		trustedCommandQuestions = missingTrustedCommandAnswers(answers.Workflow, answers.CISecretBindings)
 		unresolved = append(unresolved, trustedCommandQuestions...)
-		if len(workflowQuestions) == 0 && len(trustedCommandQuestions) == 0 && answers.Workflow != nil && answers.Workflow.Enabled {
+		if !hasWorkflowPrefix(unresolved) && len(trustedCommandQuestions) == 0 && answers.Workflow != nil && answers.Workflow.Enabled {
 			if err := config.ValidateCITrustedCommandBoundaries(answers.Workflow, answers.CISecretBindings); err != nil {
 				return model.Plan{}, fmt.Errorf("trusted command boundary: %w", err)
 			}
@@ -160,18 +171,21 @@ func Create(scan model.ScanResult, requested model.Profile, answers model.Answer
 		}
 	}
 	sort.Strings(unresolved)
+	sort.Strings(deferred)
 	createdAt := time.Now().UTC()
 	plan := model.Plan{
-		PlanVersion:        "1",
-		CreatedAt:          createdAt,
-		ExpiresAt:          createdAt.Add(30 * time.Minute),
-		Root:               scan.Root,
-		Fingerprint:        scan.Fingerprint,
-		RequestedProfile:   requested,
-		RecommendedProfile: recommended,
-		AppliedProfile:     applied,
-		Answers:            answers,
-		Unresolved:         unresolved,
+		PlanVersion:           "1",
+		CreatedAt:             createdAt,
+		ExpiresAt:             createdAt.Add(30 * time.Minute),
+		Root:                  scan.Root,
+		Fingerprint:           scan.Fingerprint,
+		RequestedProfile:      requested,
+		RecommendedProfile:    recommended,
+		AppliedProfile:        applied,
+		Answers:               answers,
+		Unresolved:            unresolved,
+		Deferred:              deferred,
+		ProposedGuardDefaults: undecidedProposedGuards(answers.Workflow, proposedDefaults),
 	}
 	if len(unresolved) == 0 {
 		operations, err := render.Build(resolvedScan, applied, answers)
@@ -381,6 +395,16 @@ func validateAnswers(answers model.Answers) error {
 	}
 	if err := config.ValidateCIAgentControlPlanes(answers.AgentControlPlanes); err != nil {
 		return fmt.Errorf("CI agent control planes: %w", err)
+	}
+	if strings.TrimSpace(answers.AdoptionPhase) != "" {
+		if _, err := model.NormalizeAdoptionPhase(answers.AdoptionPhase); err != nil {
+			return err
+		}
+	}
+	if answers.Workflow != nil && strings.TrimSpace(answers.Workflow.AdoptionPhase) != "" {
+		if _, err := model.NormalizeAdoptionPhase(answers.Workflow.AdoptionPhase); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -606,6 +630,15 @@ func resolveCommands(scan model.ScanResult, answers model.Answers) (model.ScanRe
 	}
 	sort.Strings(unresolved)
 	return resolved, unresolved, nil
+}
+
+func hasWorkflowPrefix(values []string) bool {
+	for _, value := range values {
+		if strings.HasPrefix(value, "workflow.") {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneCommands(commands map[string][]string) map[string][]string {

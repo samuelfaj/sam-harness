@@ -925,6 +925,136 @@ func guardSet(categories []string, command func(string, ...string) model.Command
 	return guards
 }
 
+func TestPlanExposesScanDetectedGuardDefaultsWithoutInventingArgv(t *testing.T) {
+	t.Parallel()
+	scan := model.ScanResult{
+		Root:        t.TempDir(),
+		Fingerprint: "fingerprint",
+		Stacks: []model.Stack{{
+			Kind:           "typescript",
+			Path:           ".",
+			PackageManager: "npm",
+			Commands: map[string][]string{
+				"lint":      {"npm", "run", "lint"},
+				"typecheck": {"npm", "run", "typecheck"},
+				"test":      {"npm", "run", "test"},
+			},
+		}},
+	}
+	answers := productionAnswers()
+	plan, err := Create(scan, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Operations) != 0 {
+		t.Fatalf("Operations = %d, want 0 until confirmation", len(plan.Operations))
+	}
+	for _, category := range []string{model.GuardLint, model.GuardTypecheck, model.GuardUnit} {
+		spec, ok := plan.ProposedGuardDefaults[category]
+		if !ok || len(spec.Command) == 0 {
+			t.Fatalf("ProposedGuardDefaults missing %s: %#v", category, plan.ProposedGuardDefaults)
+		}
+	}
+	if _, ok := plan.ProposedGuardDefaults[model.GuardIntegration]; ok {
+		t.Fatalf("invented argv for integration: %#v", plan.ProposedGuardDefaults)
+	}
+	if _, ok := plan.ProposedGuardDefaults[model.GuardE2E]; ok {
+		t.Fatalf("invented argv for e2e: %#v", plan.ProposedGuardDefaults)
+	}
+	if !contains(plan.Unresolved, "workflow.test_guards.unit") || !contains(plan.Unresolved, "workflow.static_guards.lint") {
+		t.Fatalf("Unresolved = %v, want detected categories to stay unresolved until confirmation", plan.Unresolved)
+	}
+}
+
+func TestConfirmedGuardDefaultsDecideMatchingCategoriesOnly(t *testing.T) {
+	t.Parallel()
+	scan := model.ScanResult{
+		Root:        t.TempDir(),
+		Fingerprint: "fingerprint",
+		Stacks: []model.Stack{{
+			Kind: "typescript", Path: ".", PackageManager: "npm",
+			Commands: map[string][]string{
+				"lint":      {"npm", "run", "lint"},
+				"typecheck": {"npm", "run", "typecheck"},
+				"test":      {"npm", "run", "test"},
+			},
+		}},
+	}
+	answers := productionAnswers()
+	answers.Workflow = completeWorkflow()
+	delete(answers.Workflow.StaticGuards.Commands, model.GuardLint)
+	delete(answers.Workflow.StaticGuards.Commands, model.GuardTypecheck)
+	delete(answers.Workflow.TestGuards.Commands, model.GuardUnit)
+	answers.ConfirmGuardDefaults = []string{model.GuardLint, model.GuardTypecheck, model.GuardUnit}
+	plan, err := Create(scan, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(plan.Unresolved, "workflow.static_guards.lint") || contains(plan.Unresolved, "workflow.test_guards.unit") {
+		t.Fatalf("confirmed defaults stayed unresolved: %v", plan.Unresolved)
+	}
+	if len(plan.Operations) == 0 {
+		t.Fatal("confirmed defaults did not produce a plan")
+	}
+	if plan.Answers.Workflow.TestGuards.Commands[model.GuardUnit].Command[0] != "npm" {
+		t.Fatalf("confirmed unit command = %#v", plan.Answers.Workflow.TestGuards.Commands[model.GuardUnit])
+	}
+}
+
+func TestCoreAdoptionPhaseProducesPlanWhileLaterSlotsStayDeferred(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	answers.AdoptionPhase = model.AdoptionPhaseCore
+	answers.Workflow = coreWorkflow()
+	plan, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Operations) == 0 {
+		t.Fatalf("core phase produced no operations; unresolved=%v deferred=%v", plan.Unresolved, plan.Deferred)
+	}
+	if len(plan.Unresolved) != 0 {
+		t.Fatalf("Unresolved = %v, want core phase to be complete", plan.Unresolved)
+	}
+	for _, item := range []string{"workflow.artifact.build", "workflow.deployment.staging", "workflow.migration"} {
+		if !contains(plan.Deferred, item) {
+			t.Fatalf("Deferred = %v, want %s", plan.Deferred, item)
+		}
+		if contains(plan.Unresolved, item) {
+			t.Fatalf("later-phase %s blocked the core plan", item)
+		}
+	}
+}
+
+func TestEmptyCorePhaseStillBlocks(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	answers.AdoptionPhase = model.AdoptionPhaseCore
+	plan, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Operations) != 0 {
+		t.Fatalf("Operations = %d, want empty first phase to block", len(plan.Operations))
+	}
+	if !contains(plan.Unresolved, "workflow.enabled") && !contains(plan.Unresolved, "workflow.static_guards.unit") && !contains(plan.Unresolved, "workflow.static_guards.format") {
+		t.Fatalf("Unresolved = %v, want core slots to block", plan.Unresolved)
+	}
+	if !contains(plan.Deferred, "workflow.artifact.build") {
+		t.Fatalf("Deferred = %v, want later-phase artifact to stay deferred", plan.Deferred)
+	}
+}
+
+func coreWorkflow() *model.WorkflowConfig {
+	workflow := completeWorkflow()
+	workflow.AdoptionPhase = model.AdoptionPhaseCore
+	workflow.Artifact = model.ArtifactWorkflow{}
+	workflow.Deployment = model.DeploymentWorkflow{}
+	workflow.Migration = nil
+	workflow.ReleaseSchedule = model.ReleaseSchedule{}
+	return workflow
+}
+
 func contains(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {

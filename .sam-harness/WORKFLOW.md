@@ -13,7 +13,7 @@
 - format command `gofmt is clean` in `.` (120s): `'sh' '-c' 'test -z "$(gofmt -l .)"'`
 - lint command `go vet` in `.` (600s): `'go' 'vet' './...'`
 - typecheck command `compile all Go packages` in `.` (600s): `'go' 'test' '-run' '^$' './...'`
-- architecture waiver: No separate deterministic architecture checker exists yet; dependency boundaries remain covered by package tests and the independent architecture reviewer.
+- architecture command `package import boundaries` in `.` (600s): `'go' 'test' './internal/architecture'`
 - security command `reachable vulnerability scan` in `.` (900s): `'go' 'run' 'golang.org/x/vuln/cmd/govulncheck@v1.7.0' './...'`
 - dependencies command `verify module dependencies` in `.` (120s): `'go' 'mod' 'verify'`
 - schema command `configuration schema and traceability` in `.` (600s): `'go' 'test' './internal/config' './internal/traceability'`

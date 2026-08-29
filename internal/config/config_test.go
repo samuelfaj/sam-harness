@@ -1,12 +1,34 @@
 package config
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/samuelfaj/sam-harness/internal/model"
 	"gopkg.in/yaml.v3"
 )
+
+func TestInstalledProductionConfigUsesArchitectureCommandAndCurrentHarness(t *testing.T) {
+	t.Parallel()
+	cfg, err := Load(filepath.Join("..", "..", ".sam-harness", "config.yaml"))
+	if err != nil {
+		t.Fatalf("load installed config: %v", err)
+	}
+	if cfg.HarnessVersion != model.HarnessVersion {
+		t.Fatalf("installed harness_version = %q, want %q", cfg.HarnessVersion, model.HarnessVersion)
+	}
+	if cfg.Workflow == nil {
+		t.Fatal("installed production config has no workflow")
+	}
+	command, ok := cfg.Workflow.StaticGuards.Commands[model.GuardArchitecture]
+	if !ok || len(command.Command) == 0 || !command.Required {
+		t.Fatalf("architecture is not a required command: %#v", cfg.Workflow.StaticGuards)
+	}
+	if reason := cfg.Workflow.StaticGuards.Waivers[model.GuardArchitecture]; reason != "" {
+		t.Fatalf("architecture is still a waiver: %q", reason)
+	}
+}
 
 func TestMarshalAndParseValidateThePublicSchema(t *testing.T) {
 	t.Parallel()

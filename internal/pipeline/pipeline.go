@@ -114,6 +114,9 @@ type Receipt struct {
 	ReviewPatchSHA256     string            `json:"review_patch_sha256,omitempty"`
 	RepairPatch           string            `json:"repair_patch,omitempty"`
 	RepairPatchSHA256     string            `json:"repair_patch_sha256,omitempty"`
+	ReviewRisk            string            `json:"review_risk,omitempty"`
+	ArbiterBlocked        bool              `json:"arbiter_blocked,omitempty"`
+	ArbiterReason         string            `json:"arbiter_reason,omitempty"`
 	Passed                bool              `json:"passed"`
 	Status                Status            `json:"status"`
 	Error                 string            `json:"error,omitempty"`
@@ -131,6 +134,7 @@ type RunOptions struct {
 	ReviewBase    string
 	ReviewBaseSHA string
 	ReviewHeadSHA string
+	Risk          string
 }
 
 type phaseContext struct {
@@ -138,6 +142,7 @@ type phaseContext struct {
 	reviewBase    string
 	reviewBaseSHA string
 	reviewHeadSHA string
+	risk          string
 }
 
 // Run executes only the argv commands configured for phase. It never constructs
@@ -184,6 +189,7 @@ func RunWithOptions(path string, phase model.Phase, writeReceipt bool, options R
 		reviewBase:    options.ReviewBase,
 		reviewBaseSHA: normalizedBaseSHA,
 		reviewHeadSHA: normalizedHeadSHA,
+		risk:          options.Risk,
 	}
 
 	if phase != model.PhaseAll {
@@ -582,6 +588,11 @@ func runReview(root string, cfg model.Config, context phaseContext, receipt *Rec
 	if err := validateReviewerSet(workflow.Reviewers); err != nil {
 		return err
 	}
+	orderedReviewers, err := selectReviewers(workflow.Reviewers, context.risk)
+	if err != nil {
+		return err
+	}
+	receipt.ReviewRisk = strings.TrimSpace(context.risk)
 	secretBearing := secretScopeBound(cfg, model.CISecretScopeReview)
 	if secretBearing {
 		if strings.TrimSpace(context.reviewBase) == "" || context.reviewBaseSHA == "" || context.reviewHeadSHA == "" {
@@ -592,14 +603,6 @@ func runReview(root string, cfg model.Config, context phaseContext, receipt *Rec
 			receipt.Status = StatusBlocked
 			return err
 		}
-	}
-	configured := make(map[model.ReviewerRole]model.ReviewerConfig, len(workflow.Reviewers))
-	for _, reviewer := range workflow.Reviewers {
-		configured[reviewer.Role] = reviewer
-	}
-	orderedReviewers := make([]model.ReviewerConfig, 0, len(model.ReviewerRoles))
-	for _, role := range model.ReviewerRoles {
-		orderedReviewers = append(orderedReviewers, configured[role])
 	}
 	initial, err := repositoryFingerprint(root, cfg)
 	if err != nil {
@@ -791,6 +794,12 @@ func runReview(root string, cfg model.Config, context phaseContext, receipt *Rec
 			receipt.Status = StatusBlocked
 			return err
 		}
+	}
+	if conflicts := Arbitrate(receipt.Findings); len(conflicts) > 0 {
+		receipt.Status = StatusBlocked
+		receipt.ArbiterBlocked = true
+		receipt.ArbiterReason = "conflicting independent findings: " + strings.Join(conflicts, ", ")
+		return errors.New("review blocked until conflicting independent findings are resolved")
 	}
 	if blocked {
 		receipt.Status = StatusBlocked

@@ -27,8 +27,8 @@ func TestVersionPrintsHarnessVersion(t *testing.T) {
 	if stdout.String() != want {
 		t.Fatalf("version = %q, want %q", stdout.String(), want)
 	}
-	if model.HarnessVersion != "0.3.1" {
-		t.Fatalf("HarnessVersion = %q, want 0.3.1 for this release", model.HarnessVersion)
+	if model.HarnessVersion != "0.4.0" {
+		t.Fatalf("HarnessVersion = %q, want 0.4.0 for this release", model.HarnessVersion)
 	}
 }
 
@@ -69,9 +69,29 @@ func TestUsageDocumentsV03Commands(t *testing.T) {
 		"sam-harness bootstrap gitlab",
 		"sam-harness stage classifier|context|planning|implementation|review|repair",
 		"sam-harness freeze check",
+		"sam-harness status",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("help omitted %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestStatusCLIDoesNotPromoteLaterStates(t *testing.T) {
+	root := t.TempDir()
+	writeCLIConfig(t, root, baselineCLIConfig())
+	var stdout bytes.Buffer
+	command := New(&stdout, &bytes.Buffer{})
+	if err := command.Run([]string{"status", root}); err != nil {
+		t.Fatalf("status failed: %v\n%s", err, stdout.String())
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "source: proven") {
+		t.Fatalf("status omitted proven source:\n%s", output)
+	}
+	for _, name := range []string{"review: unproven", "ci: unproven", "artifact: unproven", "deployment: unproven", "live_proof: unproven"} {
+		if !strings.Contains(output, name) {
+			t.Fatalf("status omitted %q:\n%s", name, output)
 		}
 	}
 }
@@ -547,7 +567,7 @@ func TestUpgradeAcceptsCompleteAnswersForLegacyProductionConfig(t *testing.T) {
 	outputPath := filepath.Join(t.TempDir(), "upgrade-plan.json")
 	var stdout bytes.Buffer
 	command := New(&stdout, &bytes.Buffer{})
-	if err := command.Run([]string{"upgrade", root, "--to", "0.3.1", "--answers", answersPath, "--output", outputPath, "--format", "json"}); err != nil {
+	if err := command.Run([]string{"upgrade", root, "--to", model.HarnessVersion, "--answers", answersPath, "--output", outputPath, "--format", "json"}); err != nil {
 		t.Fatalf("upgrade failed: %v\n%s", err, stdout.String())
 	}
 	var response struct {
@@ -588,7 +608,7 @@ func TestUpgradeHumanOutputNamesUnresolvedDecisions(t *testing.T) {
 
 	var stdout bytes.Buffer
 	command := New(&stdout, &bytes.Buffer{})
-	if err := command.Run([]string{"upgrade", root, "--to", "0.3.1", "--output", filepath.Join(t.TempDir(), "upgrade-plan.json")}); err != nil {
+	if err := command.Run([]string{"upgrade", root, "--to", model.HarnessVersion, "--output", filepath.Join(t.TempDir(), "upgrade-plan.json")}); err != nil {
 		t.Fatalf("upgrade failed: %v\n%s", err, stdout.String())
 	}
 	for _, expected := range []string{"Unresolved decisions:", "workflow", "No repository files were planned. Collect answers and run upgrade again."} {

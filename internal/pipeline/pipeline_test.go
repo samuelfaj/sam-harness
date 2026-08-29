@@ -413,6 +413,95 @@ printf '{"findings":[{"role":"%s","severity":"P2","summary":"recorded","evidence
 	}
 }
 
+func TestLowRiskReviewSkipsRolesAndStillBlocksOnP0(t *testing.T) {
+	root := t.TempDir()
+	writeExecutable(t, root, "review.sh", `#!/bin/sh
+role="$SAM_HARNESS_REVIEW_ROLE"
+if [ "$role" = correctness ]; then
+  printf '{"findings":[{"role":"correctness","severity":"P0","summary":"broken","evidence":"fail","path":"main.go","line":1}]}\n'
+  exit 0
+fi
+printf '{"findings":[]}\n'
+`)
+	cfg := testPipelineConfig()
+	for index := range cfg.Workflow.Reviewers {
+		cfg.Workflow.Reviewers[index].Command = []string{"./review.sh"}
+	}
+	writePipelineConfig(t, root, cfg)
+	receipt, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{Risk: model.ChangeRiskLow})
+	if err == nil || receipt.Passed || receipt.Status != StatusBlocked {
+		t.Fatalf("low-risk P0 was accepted: err=%v receipt=%#v", err, receipt)
+	}
+	if len(receipt.Commands) != 2 {
+		t.Fatalf("low-risk invoked %d roles, want 2: %#v", len(receipt.Commands), receipt.Commands)
+	}
+	if len(receipt.Commands) == len(model.ReviewerRoles) {
+		t.Fatal("low-risk invoked every configured role")
+	}
+	foundP0 := false
+	for _, finding := range receipt.Findings {
+		if finding.Severity == "P0" && finding.Role == model.ReviewerCorrectness {
+			foundP0 = true
+		}
+	}
+	if !foundP0 {
+		t.Fatalf("P0 from a running role was dropped: %#v", receipt.Findings)
+	}
+}
+
+func TestReviewArbiterBlocksConflictingFindings(t *testing.T) {
+	root := t.TempDir()
+	writeExecutable(t, root, "review.sh", `#!/bin/sh
+role="$SAM_HARNESS_REVIEW_ROLE"
+case "$role" in
+  architecture)
+    printf '{"findings":[{"role":"architecture","severity":"P0","summary":"bug","evidence":"a","path":"file.go","line":4}]}\n'
+    ;;
+  correctness)
+    printf '{"findings":[{"role":"correctness","severity":"P3","summary":"not a bug","evidence":"b","path":"file.go","line":4}]}\n'
+    ;;
+  *)
+    printf '{"findings":[]}\n'
+    ;;
+esac
+`)
+	cfg := testPipelineConfig()
+	for index := range cfg.Workflow.Reviewers {
+		cfg.Workflow.Reviewers[index].Command = []string{"./review.sh"}
+	}
+	writePipelineConfig(t, root, cfg)
+	receipt, _, err := Run(root, model.PhaseReview, false)
+	if err == nil || !receipt.ArbiterBlocked || receipt.Status != StatusBlocked {
+		t.Fatalf("conflicting findings were not blocked: err=%v receipt=%#v", err, receipt)
+	}
+}
+
+func TestReviewArbiterKeepsIdenticalAttribution(t *testing.T) {
+	root := t.TempDir()
+	writeExecutable(t, root, "review.sh", `#!/bin/sh
+printf '{"findings":[{"role":"%s","severity":"P2","summary":"same","evidence":"e","path":"file.go","line":4}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
+`)
+	cfg := testPipelineConfig()
+	for index := range cfg.Workflow.Reviewers {
+		cfg.Workflow.Reviewers[index].Command = []string{"./review.sh"}
+	}
+	writePipelineConfig(t, root, cfg)
+	receipt, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{Risk: model.ChangeRiskLow})
+	if err != nil {
+		t.Fatalf("identical findings failed review: %v\n%#v", err, receipt)
+	}
+	roles := map[model.ReviewerRole]bool{}
+	for _, finding := range receipt.Findings {
+		if finding.Path != "file.go" || finding.Line != 4 || finding.Severity != "P2" {
+			t.Fatalf("finding mutated: %#v", finding)
+		}
+		roles[finding.Role] = true
+	}
+	if !roles[model.ReviewerCorrectness] || !roles[model.ReviewerSimplicity] {
+		t.Fatalf("identical findings lost role attribution: %#v", receipt.Findings)
+	}
+}
+
 func TestReviewReceivesCanonicalBaseToHeadChangeEvidence(t *testing.T) {
 	root := t.TempDir()
 	promptDirectory := t.TempDir()

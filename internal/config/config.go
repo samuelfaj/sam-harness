@@ -187,8 +187,11 @@ func validateSemantics(cfg model.Config) error {
 		if !cfg.Release.ImmutableArtifact || !cfg.Release.SBOM || !cfg.Release.Provenance || !cfg.Release.PromotionRequired || !cfg.CI.BranchProtectionRequired {
 			return fmt.Errorf("validate config: %s requires immutable artifacts, SBOM, provenance, promotion, and branch protection", cfg.Profile)
 		}
-		if strings.TrimSpace(cfg.Release.RollbackOwner) == "" || strings.TrimSpace(cfg.Release.ObservationWindow) == "" || strings.TrimSpace(cfg.Release.ProductionEnvironment) == "" {
-			return fmt.Errorf("validate config: %s requires rollback owner, observation window, and production environment", cfg.Profile)
+		phase := workflowAdoptionPhase(cfg.Workflow)
+		if model.AdoptionPhaseRank(phase) >= model.AdoptionPhaseRank(model.AdoptionPhaseDelivery) {
+			if strings.TrimSpace(cfg.Release.RollbackOwner) == "" || strings.TrimSpace(cfg.Release.ObservationWindow) == "" || strings.TrimSpace(cfg.Release.ProductionEnvironment) == "" {
+				return fmt.Errorf("validate config: %s requires rollback owner, observation window, and production environment", cfg.Profile)
+			}
 		}
 	}
 	requireWorkflow := (cfg.Profile == model.ProfileProduction || cfg.Profile == model.ProfileRegulated) && cfg.HarnessVersion == model.HarnessVersion
@@ -472,6 +475,11 @@ func ValidateWorkflow(workflow *model.WorkflowConfig, required bool) error {
 	if required && !workflow.Correction.Enabled {
 		return fmt.Errorf("correction must be enabled")
 	}
+	if strings.TrimSpace(workflow.AdoptionPhase) != "" {
+		if _, err := model.NormalizeAdoptionPhase(workflow.AdoptionPhase); err != nil {
+			return err
+		}
+	}
 	if err := validateGuardSet("static", workflow.StaticGuards, model.StaticGuardCategories); err != nil {
 		return err
 	}
@@ -527,72 +535,113 @@ func ValidateWorkflow(workflow *model.WorkflowConfig, required bool) error {
 		return fmt.Errorf("correction must be enabled before opening a change request")
 	}
 
-	commands := []struct {
-		control string
-		spec    model.CommandSpec
-	}{
-		{"artifact build", workflow.Artifact.Build},
-		{"artifact SBOM", workflow.Artifact.SBOM},
-		{"artifact provenance", workflow.Artifact.Provenance},
-		{"deployment staging", workflow.Deployment.Staging},
-		{"deployment production", workflow.Deployment.Production},
-		{"deployment rollback", workflow.Deployment.Rollback},
-	}
-	for _, healthCheck := range workflow.Deployment.HealthChecks {
-		commands = append(commands, struct {
+	phase := workflowAdoptionPhase(workflow)
+	rank := model.AdoptionPhaseRank(phase)
+	requireArtifact := rank >= model.AdoptionPhaseRank(model.AdoptionPhaseArtifact) || artifactPresent(workflow.Artifact)
+	requireDelivery := rank >= model.AdoptionPhaseRank(model.AdoptionPhaseDelivery) || deliveryPresent(workflow)
+
+	if requireArtifact {
+		commands := []struct {
 			control string
 			spec    model.CommandSpec
-		}{"deployment health check", healthCheck})
-	}
-	for _, observationCheck := range workflow.Deployment.ObservationChecks {
-		commands = append(commands, struct {
+		}{
+			{"artifact build", workflow.Artifact.Build},
+			{"artifact SBOM", workflow.Artifact.SBOM},
+			{"artifact provenance", workflow.Artifact.Provenance},
+		}
+		for _, command := range commands {
+			if err := validateCommandSpec(command.spec, workflow.Enabled || required); err != nil {
+				return fmt.Errorf("%s: %w", command.control, err)
+			}
+		}
+		for _, path := range []struct {
 			control string
-			spec    model.CommandSpec
-		}{"deployment observation check", observationCheck})
-	}
-	for _, migration := range workflow.Migration {
-		commands = append(commands, struct {
-			control string
-			spec    model.CommandSpec
-		}{"migration", migration})
-	}
-	for _, command := range commands {
-		if err := validateCommandSpec(command.spec, workflow.Enabled || required); err != nil {
-			return fmt.Errorf("%s: %w", command.control, err)
+			path    string
+		}{
+			{"artifact", workflow.Artifact.ArtifactPath},
+			{"SBOM", workflow.Artifact.SBOMPath},
+			{"provenance", workflow.Artifact.ProvenancePath},
+		} {
+			if !safeRelativePath(path.path) {
+				return fmt.Errorf("unsafe %s path %q", path.control, path.path)
+			}
 		}
 	}
 
-	for _, path := range []struct {
-		control string
-		path    string
-	}{
-		{"artifact", workflow.Artifact.ArtifactPath},
-		{"SBOM", workflow.Artifact.SBOMPath},
-		{"provenance", workflow.Artifact.ProvenancePath},
-	} {
-		if !safeRelativePath(path.path) {
-			return fmt.Errorf("unsafe %s path %q", path.control, path.path)
+	if requireDelivery {
+		commands := []struct {
+			control string
+			spec    model.CommandSpec
+		}{
+			{"deployment staging", workflow.Deployment.Staging},
+			{"deployment production", workflow.Deployment.Production},
+			{"deployment rollback", workflow.Deployment.Rollback},
+		}
+		for _, healthCheck := range workflow.Deployment.HealthChecks {
+			commands = append(commands, struct {
+				control string
+				spec    model.CommandSpec
+			}{"deployment health check", healthCheck})
+		}
+		for _, observationCheck := range workflow.Deployment.ObservationChecks {
+			commands = append(commands, struct {
+				control string
+				spec    model.CommandSpec
+			}{"deployment observation check", observationCheck})
+		}
+		for _, migration := range workflow.Migration {
+			commands = append(commands, struct {
+				control string
+				spec    model.CommandSpec
+			}{"migration", migration})
+		}
+		for _, command := range commands {
+			if err := validateCommandSpec(command.spec, workflow.Enabled || required); err != nil {
+				return fmt.Errorf("%s: %w", command.control, err)
+			}
+		}
+		if len(workflow.Deployment.HealthChecks) == 0 {
+			return fmt.Errorf("at least one deployment health check is required")
+		}
+		if len(workflow.Deployment.ObservationChecks) == 0 {
+			return fmt.Errorf("at least one deployment observation check is required")
+		}
+		if len(workflow.Migration) == 0 {
+			return fmt.Errorf("at least one migration command is required")
+		}
+		if err := validateCanaryPercentages(workflow.Deployment.CanaryPercentages); err != nil {
+			return err
+		}
+		if len(strings.Fields(workflow.ReleaseSchedule.Cron)) != 5 {
+			return fmt.Errorf("release schedule cron must contain five fields")
+		}
+		if _, err := time.LoadLocation(workflow.ReleaseSchedule.Timezone); err != nil {
+			return fmt.Errorf("release schedule timezone %q is not an IANA timezone: %w", workflow.ReleaseSchedule.Timezone, err)
 		}
 	}
-	if len(workflow.Deployment.HealthChecks) == 0 {
-		return fmt.Errorf("at least one deployment health check is required")
-	}
-	if len(workflow.Deployment.ObservationChecks) == 0 {
-		return fmt.Errorf("at least one deployment observation check is required")
-	}
-	if len(workflow.Migration) == 0 {
-		return fmt.Errorf("at least one migration command is required")
-	}
-	if err := validateCanaryPercentages(workflow.Deployment.CanaryPercentages); err != nil {
-		return err
-	}
-	if len(strings.Fields(workflow.ReleaseSchedule.Cron)) != 5 {
-		return fmt.Errorf("release schedule cron must contain five fields")
-	}
-	if _, err := time.LoadLocation(workflow.ReleaseSchedule.Timezone); err != nil {
-		return fmt.Errorf("release schedule timezone %q is not an IANA timezone: %w", workflow.ReleaseSchedule.Timezone, err)
-	}
 	return nil
+}
+
+func workflowAdoptionPhase(workflow *model.WorkflowConfig) string {
+	if workflow == nil {
+		return model.AdoptionPhaseDelivery
+	}
+	normalized, err := model.NormalizeAdoptionPhase(workflow.AdoptionPhase)
+	if err != nil {
+		return model.AdoptionPhaseDelivery
+	}
+	return normalized
+}
+
+func artifactPresent(artifact model.ArtifactWorkflow) bool {
+	return strings.TrimSpace(artifact.ArtifactPath) != "" || strings.TrimSpace(artifact.SBOMPath) != "" || strings.TrimSpace(artifact.ProvenancePath) != "" || len(artifact.Build.Command) > 0 || len(artifact.SBOM.Command) > 0 || len(artifact.Provenance.Command) > 0
+}
+
+func deliveryPresent(workflow *model.WorkflowConfig) bool {
+	if workflow == nil {
+		return false
+	}
+	return len(workflow.Deployment.Staging.Command) > 0 || len(workflow.Deployment.Production.Command) > 0 || len(workflow.Deployment.Rollback.Command) > 0 || len(workflow.Deployment.HealthChecks) > 0 || len(workflow.Deployment.ObservationChecks) > 0 || len(workflow.Migration) > 0 || strings.TrimSpace(workflow.ReleaseSchedule.Cron) != "" || strings.TrimSpace(workflow.ReleaseSchedule.Timezone) != ""
 }
 
 func validateGuardSet(phase string, guards model.GuardSet, categories []string) error {

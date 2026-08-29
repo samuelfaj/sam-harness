@@ -1,5 +1,5 @@
 schema_version: "1"
-harness_version: 0.2.0
+harness_version: 0.4.0
 profile: production
 repository: sam-harness
 stacks:
@@ -183,8 +183,16 @@ workflow:
                     - ./...
                 required: true
                 timeout_seconds: 600
-        waivers:
-            architecture: No separate deterministic architecture checker exists yet; dependency boundaries remain covered by package tests and the independent architecture reviewer.
+            architecture:
+                name: package import boundaries
+                workdir: .
+                command:
+                    - go
+                    - test
+                    - ./internal/architecture
+                required: true
+                timeout_seconds: 600
+        waivers: {}
     test_guards:
         commands:
             business_invariants:

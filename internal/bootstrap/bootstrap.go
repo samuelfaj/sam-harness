@@ -45,6 +45,7 @@ type RemoteState struct {
 	ControlPlaneCheck             string            `json:"control_plane_check"`
 	JobTexts                      map[string]string `json:"job_texts,omitempty"`
 	Fields                        map[string]string `json:"fields,omitempty"`
+	MergeQueueDispatch            string            `json:"merge_queue_dispatch,omitempty"`
 }
 
 type Transport interface {
@@ -205,8 +206,49 @@ func SimulateMerge(state RemoteState, checks []string, approvals int, freezeChec
 	return nil
 }
 
+const GitHubMergeQueueDispatch = "sam_harness_merge_group_review"
+
 func JobTextsCredentialFree(texts map[string]string) error {
-	return mapCredentialFree("job text", texts)
+	if err := mapCredentialFree("job text", texts); err != nil {
+		return err
+	}
+	return secretBearingJobTextsSafe(texts)
+}
+
+func secretBearingJobTextsSafe(texts map[string]string) error {
+	for _, key := range sortedKeys(texts) {
+		text := texts[key]
+		if secretBearingJobText(text) && hasDirectMergeGroupTrigger(text) {
+			return fmt.Errorf("secret-bearing job text %q must not use a direct merge_group trigger", key)
+		}
+	}
+	return nil
+}
+
+func secretBearingJobText(text string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if trimmed == "pull_request_target:" || strings.HasPrefix(trimmed, "pull_request_target:") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDirectMergeGroupTrigger(text string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if trimmed == "merge_group:" || strings.HasPrefix(trimmed, "merge_group:") {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeDesired(provider Provider, desired RemoteState) (RemoteState, error) {
@@ -237,6 +279,15 @@ func normalizeDesired(provider Provider, desired RemoteState) (RemoteState, erro
 	}
 	if provider == providerGitHub {
 		desired.MergeQueue = true
+		if strings.TrimSpace(desired.MergeQueueDispatch) == "" {
+			desired.MergeQueueDispatch = GitHubMergeQueueDispatch
+		}
+		if strings.TrimSpace(desired.Fields["merge_queue_dispatch"]) == "" {
+			if desired.Fields == nil {
+				desired.Fields = map[string]string{}
+			}
+			desired.Fields["merge_queue_dispatch"] = GitHubMergeQueueDispatch
+		}
 	}
 	if desired.RequiredApprovals < 1 {
 		desired.RequiredApprovals = 1
@@ -309,6 +360,7 @@ func mutationsFrom(desired RemoteState) []Mutation {
 		{Field: "allow_deletions", Value: strconv.FormatBool(desired.AllowDeletions)},
 		{Field: "protected_environments", Value: formatList(desired.ProtectedEnvironments)},
 		{Field: "control_plane_check", Value: desired.ControlPlaneCheck},
+		{Field: "merge_queue_dispatch", Value: desired.MergeQueueDispatch},
 	}
 	for _, key := range sortedKeys(desired.Fields) {
 		mutations = append(mutations, Mutation{Field: "fields." + key, Value: desired.Fields[key]})
@@ -343,6 +395,7 @@ func diffStates(want, got RemoteState) []string {
 	add("allow_deletions", strconv.FormatBool(want.AllowDeletions), strconv.FormatBool(got.AllowDeletions))
 	add("protected_environments", formatList(want.ProtectedEnvironments), formatList(got.ProtectedEnvironments))
 	add("control_plane_check", want.ControlPlaneCheck, got.ControlPlaneCheck)
+	add("merge_queue_dispatch", want.MergeQueueDispatch, got.MergeQueueDispatch)
 	addMapMismatches(&mismatches, "job_texts", want.JobTexts, got.JobTexts)
 	addMapMismatches(&mismatches, "fields", want.Fields, got.Fields)
 	return mismatches
@@ -445,6 +498,9 @@ func remoteStateCredentialFree(state RemoteState) error {
 		return err
 	}
 	if err := JobTextsCredentialFree(state.JobTexts); err != nil {
+		return err
+	}
+	if err := valueCredentialFree(state.MergeQueueDispatch); err != nil {
 		return err
 	}
 	return mapCredentialFree("field", state.Fields)

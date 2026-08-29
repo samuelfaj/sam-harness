@@ -1,11 +1,12 @@
 package model
 
 import (
+	"fmt"
 	"strings"
 	"time"
 )
 
-var HarnessVersion = "0.3.1"
+var HarnessVersion = "0.4.0"
 
 const SchemaVersion = "1"
 
@@ -16,6 +17,45 @@ const (
 	ProfileBaseline   Profile = "baseline"
 	ProfileProduction Profile = "production"
 	ProfileRegulated  Profile = "regulated"
+)
+
+const (
+	AdoptionPhaseCore     = "core"
+	AdoptionPhaseArtifact = "artifact"
+	AdoptionPhaseDelivery = "delivery"
+)
+
+func NormalizeAdoptionPhase(value string) (string, error) {
+	switch strings.TrimSpace(value) {
+	case "", AdoptionPhaseDelivery:
+		return AdoptionPhaseDelivery, nil
+	case AdoptionPhaseCore, AdoptionPhaseArtifact:
+		return strings.TrimSpace(value), nil
+	default:
+		return "", fmt.Errorf("adoption_phase must be core, artifact, or delivery")
+	}
+}
+
+func AdoptionPhaseRank(value string) int {
+	normalized, err := NormalizeAdoptionPhase(value)
+	if err != nil {
+		return 0
+	}
+	switch normalized {
+	case AdoptionPhaseCore:
+		return 1
+	case AdoptionPhaseArtifact:
+		return 2
+	default:
+		return 3
+	}
+}
+
+const (
+	ChangeRiskLow      = "low"
+	ChangeRiskMedium   = "medium"
+	ChangeRiskHigh     = "high"
+	ChangeRiskCritical = "critical"
 )
 
 func (p Profile) Valid(allowAuto bool) bool {
@@ -210,6 +250,8 @@ type Answers struct {
 	RollbackOwner           string                         `json:"rollback_owner,omitempty"`
 	ProductionEnvironment   string                         `json:"production_environment,omitempty"`
 	Workflow                *WorkflowConfig                `json:"workflow,omitempty"`
+	AdoptionPhase           string                         `json:"adoption_phase,omitempty"`
+	ConfirmGuardDefaults    []string                       `json:"confirm_guard_defaults,omitempty"`
 }
 
 func (a Answers) Missing(scan ScanResult) []string {
@@ -323,14 +365,15 @@ type ReleaseSchedule struct {
 
 type WorkflowConfig struct {
 	Enabled         bool               `json:"enabled" yaml:"enabled"`
+	AdoptionPhase   string             `json:"adoption_phase,omitempty" yaml:"adoption_phase,omitempty"`
 	StaticGuards    GuardSet           `json:"static_guards" yaml:"static_guards"`
 	TestGuards      GuardSet           `json:"test_guards" yaml:"test_guards"`
 	Reviewers       []ReviewerConfig   `json:"reviewers" yaml:"reviewers"`
 	Correction      CorrectionConfig   `json:"correction" yaml:"correction"`
-	Artifact        ArtifactWorkflow   `json:"artifact" yaml:"artifact"`
-	Deployment      DeploymentWorkflow `json:"deployment" yaml:"deployment"`
-	Migration       []CommandSpec      `json:"migration" yaml:"migration"`
-	ReleaseSchedule ReleaseSchedule    `json:"release_schedule" yaml:"release_schedule"`
+	Artifact        ArtifactWorkflow   `json:"artifact,omitempty" yaml:"artifact,omitempty"`
+	Deployment      DeploymentWorkflow `json:"deployment,omitempty" yaml:"deployment,omitempty"`
+	Migration       []CommandSpec      `json:"migration,omitempty" yaml:"migration,omitempty"`
+	ReleaseSchedule ReleaseSchedule    `json:"release_schedule,omitempty" yaml:"release_schedule,omitempty"`
 }
 
 type Authority struct {
@@ -440,18 +483,20 @@ type Operation struct {
 }
 
 type Plan struct {
-	PlanVersion        string      `json:"plan_version"`
-	ID                 string      `json:"id"`
-	CreatedAt          time.Time   `json:"created_at"`
-	ExpiresAt          time.Time   `json:"expires_at"`
-	Root               string      `json:"root"`
-	Fingerprint        string      `json:"fingerprint"`
-	RequestedProfile   Profile     `json:"requested_profile"`
-	RecommendedProfile Profile     `json:"recommended_profile"`
-	AppliedProfile     Profile     `json:"applied_profile"`
-	Answers            Answers     `json:"answers"`
-	Unresolved         []string    `json:"unresolved"`
-	Operations         []Operation `json:"operations"`
+	PlanVersion           string                 `json:"plan_version"`
+	ID                    string                 `json:"id"`
+	CreatedAt             time.Time              `json:"created_at"`
+	ExpiresAt             time.Time              `json:"expires_at"`
+	Root                  string                 `json:"root"`
+	Fingerprint           string                 `json:"fingerprint"`
+	RequestedProfile      Profile                `json:"requested_profile"`
+	RecommendedProfile    Profile                `json:"recommended_profile"`
+	AppliedProfile        Profile                `json:"applied_profile"`
+	Answers               Answers                `json:"answers"`
+	Unresolved            []string               `json:"unresolved"`
+	Deferred              []string               `json:"deferred,omitempty"`
+	ProposedGuardDefaults map[string]CommandSpec `json:"proposed_guard_defaults,omitempty"`
+	Operations            []Operation            `json:"operations"`
 }
 
 type GateResult struct {

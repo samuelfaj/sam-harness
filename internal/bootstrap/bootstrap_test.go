@@ -335,6 +335,47 @@ func TestApplySecondCallIsIdempotent(t *testing.T) {
 	assertCredentialFree(t, second)
 }
 
+func TestGitHubPlanRequiresMergeQueueDispatchReadback(t *testing.T) {
+	t.Parallel()
+	plan, err := CreatePlan(providerGitHub, "fingerprint", validDesired(providerGitHub))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Desired.MergeQueueDispatch != GitHubMergeQueueDispatch {
+		t.Fatalf("MergeQueueDispatch = %q, want %q", plan.Desired.MergeQueueDispatch, GitHubMergeQueueDispatch)
+	}
+	incomplete := cloneState(plan.Desired)
+	incomplete.MergeQueueDispatch = ""
+	delete(incomplete.Fields, "merge_queue_dispatch")
+	transport := &fakeTransport{state: incomplete}
+	result, err := Apply(plan, plan.ID, transport)
+	if err == nil && result.Ready {
+		t.Fatal("bootstrap reported ready without merge-queue dispatch completeness")
+	}
+	if result.Ready {
+		t.Fatal("Ready = true without merge-queue dispatch on readback")
+	}
+	found := false
+	for _, mismatch := range result.Mismatches {
+		if strings.Contains(mismatch, "merge_queue_dispatch") {
+			found = true
+		}
+	}
+	if !found && err == nil {
+		t.Fatalf("Mismatches = %v, want merge_queue_dispatch", result.Mismatches)
+	}
+}
+
+func TestJobTextsCredentialFreeRejectsSecretBearingMergeGroupTrigger(t *testing.T) {
+	t.Parallel()
+	secretBearing := map[string]string{
+		"agents": "name: sam-harness agents\non:\n  pull_request_target:\n  merge_group:\njobs:\n  review:\n    runs-on: ubuntu-latest\n",
+	}
+	if err := JobTextsCredentialFree(secretBearing); err == nil {
+		t.Fatal("secret-bearing merge_group trigger was accepted")
+	}
+}
+
 func TestJobTextsCredentialFree(t *testing.T) {
 	t.Parallel()
 	ordinary := map[string]string{
