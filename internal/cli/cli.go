@@ -461,10 +461,11 @@ func (c *CLI) bootstrap(args []string) error {
 		fmt.Fprintf(c.Stdout, "Apply only after approval: sam-harness bootstrap %s --accept %s\n", provider, plan.ID)
 		return nil
 	}
-	if c.BootstrapTransport == nil {
-		return errors.New("bootstrap apply requires an injected provider transport")
+	transport := c.BootstrapTransport
+	if transport == nil {
+		transport = bootstrap.DefaultTransport(provider, options.path())
 	}
-	result, err := bootstrap.Apply(plan, options.values["accept"], c.BootstrapTransport)
+	result, err := bootstrap.Apply(plan, options.values["accept"], transport)
 	if err != nil {
 		return err
 	}
@@ -519,6 +520,7 @@ func (c *CLI) stage(args []string) error {
 		if req.PlanID != plan.ID || req.Fingerprint != plan.Fingerprint {
 			return fmt.Errorf("stage request is not bound to approved plan %s", plan.ID)
 		}
+		req.Authority = authorityFromAnswers(plan.Answers)
 	}
 	receipt, err := stage.Run(req)
 	if err != nil {
@@ -952,6 +954,30 @@ func cloneCISecretBindings(values map[string][]model.CISecretBinding) map[string
 		cloned[provider] = append([]model.CISecretBinding(nil), bindings...)
 	}
 	return cloned
+}
+
+func authorityFromAnswers(answers model.Answers) model.Authority {
+	var auth model.Authority
+	if answers.AllowedActions == nil {
+		return auth
+	}
+	for _, action := range *answers.AllowedActions {
+		switch action {
+		case "write_repository":
+			auth.WriteRepository = true
+		case "network":
+			auth.Network = true
+		case "commit":
+			auth.Commit = true
+		case "push":
+			auth.Push = true
+		case "release":
+			auth.Release = true
+		case "deploy":
+			auth.Deploy = true
+		}
+	}
+	return auth
 }
 
 func valueOr(value, fallback string) string {

@@ -67,6 +67,7 @@ func TestRunSixStagesEmitSchemaValidReceiptsWithSharedPlanAndFingerprint(t *test
 			Root:          root,
 			Risk:          risk,
 			AffectedPaths: paths,
+			Authority:     model.Authority{WriteRepository: true},
 			Input:         mustJSON(t, inputs[name]),
 		})
 		if err != nil {
@@ -105,11 +106,17 @@ func TestRunContextListsExistingFiles(t *testing.T) {
 	if !hasPath(out["instructions"], "AGENTS.md") {
 		t.Fatalf("instructions = %v, want AGENTS.md", out["instructions"])
 	}
+	if !hasPath(out["instructions"], "apps/web/AGENTS.md") {
+		t.Fatalf("instructions = %v, want nested apps/web/AGENTS.md", out["instructions"])
+	}
 	if !hasPath(out["skills"], "skills/example/SKILL.md") {
 		t.Fatalf("skills = %v, want skills/example/SKILL.md", out["skills"])
 	}
 	if !hasPath(out["source"], "main.go") {
 		t.Fatalf("source = %v, want main.go", out["source"])
+	}
+	if !hasPath(out["source"], "apps/web/src/app.ts") {
+		t.Fatalf("source = %v, want nested TypeScript apps/web/src/app.ts", out["source"])
 	}
 	if !hasPath(out["tests"], "example_test.go") {
 		t.Fatalf("tests = %v, want example_test.go", out["tests"])
@@ -217,7 +224,7 @@ func TestRunImplementationBlockedWithoutAuthority(t *testing.T) {
 	writeFile(t, filepath.Join(root, "README.md"), "fixture\n")
 	fingerprint := mustFingerprint(t, root)
 	paths := []string{"README.md"}
-	for _, action := range []string{"commit", "push", "pr", "mr", "release", "deploy"} {
+	for _, action := range []string{"edit", "write", "commit", "push", "pr", "mr", "release", "deploy"} {
 		_, err := Run(Request{
 			Stage:         Implementation,
 			PlanID:        "plan-auth",
@@ -232,6 +239,8 @@ func TestRunImplementationBlockedWithoutAuthority(t *testing.T) {
 	}
 
 	granted := map[string]model.Authority{
+		"edit":    {WriteRepository: true},
+		"write":   {WriteRepository: true},
 		"commit":  {Commit: true},
 		"push":    {Push: true},
 		"pr":      {Push: true},
@@ -320,7 +329,9 @@ func TestRunSummaryNeverSetsProof(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "README.md"), "fixture\n")
 	for _, name := range []string{Classifier, Context, Planning, Implementation, Review, Repair} {
-		rec, err := Run(baseRequest(t, root, name, map[string]any{"paths": []string{"README.md"}, "task": "summarize", "action": "edit"}))
+		req := baseRequest(t, root, name, map[string]any{"paths": []string{"README.md"}, "task": "summarize", "action": "edit"})
+		req.Authority.WriteRepository = true
+		rec, err := Run(req)
 		if err != nil {
 			t.Fatalf("Run(%s) = %v", name, err)
 		}
@@ -384,8 +395,10 @@ func contextRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "AGENTS.md"), "# Agents\n")
+	writeFile(t, filepath.Join(root, "apps", "web", "AGENTS.md"), "# Nested workspace\n")
 	writeFile(t, filepath.Join(root, "skills", "example", "SKILL.md"), "# Skill\n")
 	writeFile(t, filepath.Join(root, "main.go"), "package main\n")
+	writeFile(t, filepath.Join(root, "apps", "web", "src", "app.ts"), "export const n = 1\n")
 	writeFile(t, filepath.Join(root, "example_test.go"), "package main\n")
 	writeFile(t, filepath.Join(root, "schema", "example.json"), "{}\n")
 	writeFile(t, filepath.Join(root, ".sam-harness", "evidence", "run.json"), "{\"ok\":true}\n")

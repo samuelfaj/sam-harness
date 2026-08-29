@@ -258,6 +258,44 @@ func TestAdoptImplementSecurityGuardViaCLI(t *testing.T) {
 	if err != nil || string(got) != "keep-me\n" {
 		t.Fatalf("unrelated file mutated: %q err=%v", got, err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "leaked.env"), []byte("TOKEN=ghp_exampletokenvalue0001\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	checkPlan := filepath.Join(t.TempDir(), "after-secret.json")
+	if err := command.Run([]string{"adopt", "--guided", root, "--answers", answersPath, "--output", checkPlan}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stdout.String(), "guard:security existing-and-validated") {
+		t.Fatalf("CLI coverage treated a secret-bearing tree as validated:\n%s", stdout.String())
+	}
+}
+
+func TestBootstrapAcceptUsesDefaultTransportWithoutInjection(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/cli-bootstrap-default\n\ngo 1.27.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	command := New(&stdout, &bytes.Buffer{})
+	if command.BootstrapTransport != nil {
+		t.Fatal("New() injected a test transport")
+	}
+	if err := command.Run([]string{"bootstrap", "github", root, "--format", "json"}); err != nil {
+		t.Fatal(err)
+	}
+	var plan bootstrap.Plan
+	if err := json.Unmarshal(stdout.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	err := command.Run([]string{"bootstrap", "github", root, "--accept", plan.ID})
+	if err == nil {
+		t.Fatal("default transport applied provider policy without live readback")
+	}
+	if strings.Contains(err.Error(), "injected provider transport") {
+		t.Fatalf("CLI.New still requires test-only injection: %v", err)
+	}
 }
 
 func TestBootstrapReadbackMismatchFailsClosed(t *testing.T) {
