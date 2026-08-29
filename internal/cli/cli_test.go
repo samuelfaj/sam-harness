@@ -16,6 +16,43 @@ import (
 	"github.com/samuelfaj/sam-harness/internal/repo"
 )
 
+func TestVersionPrintsHarnessVersion(t *testing.T) {
+	t.Parallel()
+	var stdout bytes.Buffer
+	command := New(&stdout, &bytes.Buffer{})
+	if err := command.Run([]string{"version"}); err != nil {
+		t.Fatal(err)
+	}
+	want := "sam-harness " + model.HarnessVersion + "\n"
+	if stdout.String() != want {
+		t.Fatalf("version = %q, want %q", stdout.String(), want)
+	}
+	if model.HarnessVersion != "0.3.0" {
+		t.Fatalf("HarnessVersion = %q, want 0.3.0 for this release", model.HarnessVersion)
+	}
+}
+
+func TestBootstrapScriptsDefaultToHarnessVersion(t *testing.T) {
+	t.Parallel()
+	scripts := filepath.Join("..", "..", "skills", "sam-harness", "scripts")
+	sh, err := os.ReadFile(filepath.Join(scripts, "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps1, err := os.ReadFile(filepath.Join(scripts, "bootstrap.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shDefault := "SAM_HARNESS_VERSION:-" + model.HarnessVersion
+	if !strings.Contains(string(sh), shDefault) {
+		t.Fatalf("bootstrap.sh default missing %q", shDefault)
+	}
+	psDefault := `else { "` + model.HarnessVersion + `" }`
+	if !strings.Contains(string(ps1), psDefault) {
+		t.Fatalf("bootstrap.ps1 default missing %q", psDefault)
+	}
+}
+
 func TestUsageDocumentsV03Commands(t *testing.T) {
 	t.Parallel()
 	var stdout bytes.Buffer
