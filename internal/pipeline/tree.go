@@ -91,7 +91,7 @@ func snapshotGitControl(root string) (map[string]fileState, error) {
 		return nil, err
 	}
 	if info.IsDir() {
-		return snapshotRepository(gitRoot, nil)
+		return snapshotRepository(gitRoot, ignoredGitControlEntry)
 	}
 	if !info.Mode().IsRegular() {
 		return nil, errors.New("unsupported .git control entry")
@@ -136,7 +136,7 @@ func snapshotGitControl(root string) (map[string]fileState, error) {
 }
 
 func mergeSnapshot(destination map[string]fileState, prefix, root string) error {
-	snapshot, err := snapshotRepository(root, nil)
+	snapshot, err := snapshotRepository(root, ignoredGitControlEntry)
 	if err != nil {
 		return err
 	}
@@ -144,6 +144,11 @@ func mergeSnapshot(destination map[string]fileState, prefix, root string) error 
 		destination[prefix+"/"+path] = state
 	}
 	return nil
+}
+
+func ignoredGitControlEntry(relative string, entry os.DirEntry) bool {
+	name := filepath.Base(filepath.ToSlash(relative))
+	return strings.HasSuffix(name, ".lock") || strings.HasPrefix(name, "tmp_pack_")
 }
 
 func snapshotRepository(root string, skip func(string, os.DirEntry) bool) (map[string]fileState, error) {

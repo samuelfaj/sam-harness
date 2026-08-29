@@ -70,6 +70,30 @@ printf 'static ran\n'
 	}
 }
 
+func TestSnapshotGitControlIgnoresTransientGitLockFiles(t *testing.T) {
+	root := t.TempDir()
+	initializeTestGit(t, root)
+	before, err := snapshotGitControl(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{".git/index.lock", ".git/objects/maintenance.lock", ".git/objects/tmp_pack_123"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, path)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, path), []byte("transient\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after, err := snapshotGitControl(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshotsEqual(before, after) {
+		t.Fatal("snapshotGitControl treated transient Git lock files as repository mutations")
+	}
+}
+
 func TestPipelineTrustedConfigOverrideGovernsPRWorktree(t *testing.T) {
 	root := t.TempDir()
 	trustedMarker := filepath.Join(t.TempDir(), "trusted-ran")
