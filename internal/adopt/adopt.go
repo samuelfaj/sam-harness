@@ -146,7 +146,7 @@ func Run(opts Options) (Report, error) {
 	if strings.TrimSpace(opts.WaiverControl) != "" && opts.Mode != ModeGuided {
 		return report, fmt.Errorf("waiver requires mode %s", ModeGuided)
 	}
-	if implement != "" && implement != securityControl {
+	if implement != "" && !knownImplementControl(implement) {
 		return report, fmt.Errorf("unknown control %q", implement)
 	}
 
@@ -164,6 +164,7 @@ func Run(opts Options) (Report, error) {
 		return report, err
 	}
 	questions := questionsFor(locale, interviewPlan.Unresolved)
+	questions = append(questions, confirmationQuestions(locale, interviewPlan)...)
 	if opts.Interactive && opts.Stdin != nil {
 		answers = applyInterview(opts.Stdin, stdout, questions, answers)
 		interviewPlan, err = planner.Create(scanResult, model.ProfileAuto, answers)
@@ -171,13 +172,14 @@ func Run(opts Options) (Report, error) {
 			return report, err
 		}
 		questions = questionsFor(locale, interviewPlan.Unresolved)
+		questions = append(questions, confirmationQuestions(locale, interviewPlan)...)
 	}
 
 	var plan model.Plan
 	var planFile string
 	var task *BoundedTask
 	if implement != "" {
-		plan, planFile, task, err = resolveSecurityPlan(opts, scanResult, interviewPlan, answers)
+		plan, planFile, task, err = resolveImplementPlan(opts, scanResult, interviewPlan, answers, implement)
 		if err != nil {
 			return report, err
 		}
@@ -645,6 +647,50 @@ func bytesContainSecret(data []byte) bool {
 	return false
 }
 
+func confirmationQuestions(locale string, plan model.Plan) []Question {
+	var questions []Question
+	categories := make([]string, 0, len(plan.ProposedGuardDefaults))
+	for category := range plan.ProposedGuardDefaults {
+		categories = append(categories, category)
+	}
+	sort.Strings(categories)
+	for _, category := range categories {
+		spec := plan.ProposedGuardDefaults[category]
+		questions = append(questions, Question{
+			ID:          "confirm_guard_default:" + category,
+			Prompt:      fmt.Sprintf("Confirm detected %s command `%s`?", category, strings.Join(spec.Command, " ")),
+			Impact:      "Yes records the scan-detected argv. No leaves the category unresolved until you supply a command or waiver.",
+			SafeDefault: "yes",
+		})
+	}
+	if len(plan.ProposedBrowserCommand) > 0 {
+		questions = append(questions, Question{
+			ID:          "confirm_guard_default:browser",
+			Prompt:      fmt.Sprintf("Confirm detected browser command `%s`?", strings.Join(plan.ProposedBrowserCommand, " ")),
+			Impact:      "A user interface needs executable browser proof or an explicit waiver.",
+			SafeDefault: "yes",
+		})
+	}
+	if len(plan.ProposedAccessibilityCommand) > 0 {
+		questions = append(questions, Question{
+			ID:          "confirm_guard_default:accessibility",
+			Prompt:      fmt.Sprintf("Confirm detected accessibility command `%s`?", strings.Join(plan.ProposedAccessibilityCommand, " ")),
+			Impact:      "A user interface needs executable accessibility proof or an explicit waiver.",
+			SafeDefault: "yes",
+		})
+	}
+	if plan.ProposedReviewerHost != "" && len(plan.ProposedReviewerCommand) > 0 {
+		questions = append(questions, Question{
+			ID:          "confirm_runtime_reviewers",
+			Prompt:      fmt.Sprintf("Use default %s reviewer commands for all six roles?", plan.ProposedReviewerHost),
+			Impact:      "Yes installs the host recipe with filesystem_read_only attestation still required.",
+			SafeDefault: "yes",
+		})
+	}
+	_ = locale
+	return questions
+}
+
 func questionsFor(locale string, unresolved []string) []Question {
 	questions := make([]Question, 0, len(unresolved))
 	for _, id := range unresolved {
@@ -867,8 +913,25 @@ func setAnswerField(answers model.Answers, id, value string) model.Answers {
 		}
 	case "standardize_commits":
 		answers.StandardizeCommits = parseBoolPtr(value)
+	case "confirm_runtime_reviewers":
+		answers.ConfirmRuntimeReviewers = parseBoolPtr(value)
+	default:
+		if category, ok := strings.CutPrefix(id, "confirm_guard_default:"); ok {
+			if parsed := parseBoolPtr(value); parsed != nil && *parsed {
+				answers.ConfirmGuardDefaults = appendUnique(answers.ConfirmGuardDefaults, category)
+			}
+		}
 	}
 	return answers
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func parseBoolPtr(value string) *bool {

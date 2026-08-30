@@ -32,6 +32,24 @@ func TestRunDetectsEverySupportedStackInMixedRepository(t *testing.T) {
 	}
 }
 
+func TestTypeScriptDetectionRecordsPlaywrightBrowserCommand(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"packageManager":"npm@11.0.0","devDependencies":{"@playwright/test":"1.50.0","react":"19.1.0"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Run(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.HasUI {
+		t.Fatal("HasUI = false")
+	}
+	if got := result.Stacks[0].Commands["browser"]; len(got) != 3 || got[1] != "playwright" {
+		t.Fatalf("browser command = %#v", got)
+	}
+}
+
 func TestTypeScriptDetectionUsesDeclaredScripts(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(fixtureRoot(t), "typescript")

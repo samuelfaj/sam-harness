@@ -75,6 +75,7 @@ func TestRunRejectsMissingProductionInstallationFiles(t *testing.T) {
 		".gitlab/merge_request_templates/sam-harness.md",
 		"services/api/AGENTS.md",
 		".github/workflows/sam-harness.yml",
+		".github/workflows/sam-harness-merge-queue-dispatch.yml",
 		".sam-harness/ci/gitlab.yml",
 		".gitlab-ci.yml",
 	}

@@ -104,7 +104,7 @@ Static categories: `format`, `lint`, `typecheck`, `architecture`, `security`, `d
 
 Test categories: `unit`, `integration`, `contract`, `business_invariants`, `property`, `mutation`, `e2e`, `performance`.
 
-`plan` may propose scan-detected stack commands as confirmable defaults for matching categories (`lint`/`typecheck`/`test`/`format`/`security`). Those defaults do not decide a category until `confirm_guard_defaults` lists it or the operator writes the command or waiver. Undetected categories stay empty; argv is never invented.
+`plan` may propose scan-detected stack commands as confirmable defaults for matching categories (`lint`/`typecheck`/`test`/`format`/`security`). Those defaults do not decide a category until `confirm_guard_defaults` lists it or the operator writes the command or waiver. Undetected categories stay empty; argv is never invented. Interactive onboard asks yes/no for each proposed command. `confirm_runtime_reviewers` installs the `ci_agent_runtime` host recipe (codex, claude-code, or grok) for all six roles with `review_timeout_seconds` as the budget.
 
 Production and regulated adoption may set `adoption_phase` to `core` (local+CI+tests+review), `artifact`, or `delivery` (staging/production/observation). Later-phase slots stay unresolved for later phases and do not block the current phase’s plan. An empty current phase still blocks. Omit the field for full delivery completeness.
 

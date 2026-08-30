@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-var HarnessVersion = "0.4.0"
+var HarnessVersion = "0.5.0"
 
 const SchemaVersion = "1"
 
@@ -252,6 +252,12 @@ type Answers struct {
 	Workflow                *WorkflowConfig                `json:"workflow,omitempty"`
 	AdoptionPhase           string                         `json:"adoption_phase,omitempty"`
 	ConfirmGuardDefaults    []string                       `json:"confirm_guard_defaults,omitempty"`
+	ConfirmRuntimeReviewers *bool                          `json:"confirm_runtime_reviewers,omitempty"`
+	ReviewTimeoutSeconds    int                            `json:"review_timeout_seconds,omitempty"`
+	BrowserCommand          []string                       `json:"browser_command,omitempty"`
+	BrowserWaiver           string                         `json:"browser_waiver,omitempty"`
+	AccessibilityCommand    []string                       `json:"accessibility_command,omitempty"`
+	AccessibilityWaiver     string                         `json:"accessibility_waiver,omitempty"`
 }
 
 func (a Answers) Missing(scan ScanResult) []string {
@@ -440,12 +446,16 @@ type MigrationConfig struct {
 }
 
 type DesignConfig struct {
-	Applicable    bool   `json:"applicable" yaml:"applicable"`
-	SourceOfTruth string `json:"source_of_truth,omitempty" yaml:"source_of_truth,omitempty"`
-	BrowserProof  bool   `json:"browser_proof" yaml:"browser_proof"`
-	HumanLabels   bool   `json:"human_labels" yaml:"human_labels"`
-	Accessibility bool   `json:"accessibility" yaml:"accessibility"`
-	Localization  bool   `json:"localization" yaml:"localization"`
+	Applicable           bool     `json:"applicable" yaml:"applicable"`
+	SourceOfTruth        string   `json:"source_of_truth,omitempty" yaml:"source_of_truth,omitempty"`
+	BrowserProof         bool     `json:"browser_proof" yaml:"browser_proof"`
+	HumanLabels          bool     `json:"human_labels" yaml:"human_labels"`
+	Accessibility        bool     `json:"accessibility" yaml:"accessibility"`
+	Localization         bool     `json:"localization" yaml:"localization"`
+	BrowserCommand       []string `json:"browser_command,omitempty" yaml:"browser_command,omitempty"`
+	BrowserWaiver        string   `json:"browser_waiver,omitempty" yaml:"browser_waiver,omitempty"`
+	AccessibilityCommand []string `json:"accessibility_command,omitempty" yaml:"accessibility_command,omitempty"`
+	AccessibilityWaiver  string   `json:"accessibility_waiver,omitempty" yaml:"accessibility_waiver,omitempty"`
 }
 
 type GovernanceConfig struct {
@@ -483,20 +493,24 @@ type Operation struct {
 }
 
 type Plan struct {
-	PlanVersion           string                 `json:"plan_version"`
-	ID                    string                 `json:"id"`
-	CreatedAt             time.Time              `json:"created_at"`
-	ExpiresAt             time.Time              `json:"expires_at"`
-	Root                  string                 `json:"root"`
-	Fingerprint           string                 `json:"fingerprint"`
-	RequestedProfile      Profile                `json:"requested_profile"`
-	RecommendedProfile    Profile                `json:"recommended_profile"`
-	AppliedProfile        Profile                `json:"applied_profile"`
-	Answers               Answers                `json:"answers"`
-	Unresolved            []string               `json:"unresolved"`
-	Deferred              []string               `json:"deferred,omitempty"`
-	ProposedGuardDefaults map[string]CommandSpec `json:"proposed_guard_defaults,omitempty"`
-	Operations            []Operation            `json:"operations"`
+	PlanVersion                  string                 `json:"plan_version"`
+	ID                           string                 `json:"id"`
+	CreatedAt                    time.Time              `json:"created_at"`
+	ExpiresAt                    time.Time              `json:"expires_at"`
+	Root                         string                 `json:"root"`
+	Fingerprint                  string                 `json:"fingerprint"`
+	RequestedProfile             Profile                `json:"requested_profile"`
+	RecommendedProfile           Profile                `json:"recommended_profile"`
+	AppliedProfile               Profile                `json:"applied_profile"`
+	Answers                      Answers                `json:"answers"`
+	Unresolved                   []string               `json:"unresolved"`
+	Deferred                     []string               `json:"deferred,omitempty"`
+	ProposedGuardDefaults        map[string]CommandSpec `json:"proposed_guard_defaults,omitempty"`
+	ProposedReviewerHost         string                 `json:"proposed_reviewer_host,omitempty"`
+	ProposedReviewerCommand      []string               `json:"proposed_reviewer_command,omitempty"`
+	ProposedBrowserCommand       []string               `json:"proposed_browser_command,omitempty"`
+	ProposedAccessibilityCommand []string               `json:"proposed_accessibility_command,omitempty"`
+	Operations                   []Operation            `json:"operations"`
 }
 
 type GateResult struct {

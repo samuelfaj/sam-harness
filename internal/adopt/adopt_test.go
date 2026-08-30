@@ -327,6 +327,48 @@ func TestCoverageUsesDetectedCIAndInstalledFreeze(t *testing.T) {
 	}
 }
 
+func TestConfirmGuardDefaultYesRecordsCategory(t *testing.T) {
+	t.Parallel()
+	answers := setAnswerField(model.Answers{}, "confirm_guard_default:unit", "yes")
+	if len(answers.ConfirmGuardDefaults) != 1 || answers.ConfirmGuardDefaults[0] != "unit" {
+		t.Fatalf("ConfirmGuardDefaults = %#v", answers.ConfirmGuardDefaults)
+	}
+	answers = setAnswerField(answers, "confirm_runtime_reviewers", "yes")
+	if answers.ConfirmRuntimeReviewers == nil || !*answers.ConfirmRuntimeReviewers {
+		t.Fatal("confirm_runtime_reviewers was not recorded")
+	}
+}
+
+func TestImplementGuardFormatOnGoFixture(t *testing.T) {
+	t.Parallel()
+	root, tmp := copyFixture(t, "go")
+	answersPath := filepath.Join(tmp, "answers.json")
+	writeBaselineAnswers(t, answersPath)
+	harnessPlan := filepath.Join(tmp, "harness.json")
+	proposed, err := Run(Options{Root: root, Mode: ModeGuided, AnswersPath: answersPath, PlanOutput: harnessPlan, Stdout: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(Options{Root: root, Mode: ModeGuided, AnswersPath: answersPath, PlanOutput: harnessPlan, AcceptPlanID: proposed.Plan.ID, Stdout: io.Discard}); err != nil {
+		t.Fatal(err)
+	}
+	taskPlan := filepath.Join(tmp, "format.json")
+	task, err := Run(Options{Root: root, Mode: ModeGuided, AnswersPath: answersPath, PlanOutput: taskPlan, ImplementControl: "guard:format", Stdout: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Task == nil || task.Task.ControlID != "guard:format" {
+		t.Fatalf("Task = %#v", task.Task)
+	}
+	applied, err := Run(Options{Root: root, Mode: ModeGuided, AnswersPath: answersPath, PlanOutput: taskPlan, ImplementControl: "guard:format", AcceptPlanID: task.Plan.ID, Stdout: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applied.Changed) == 0 {
+		t.Fatal("format implementation changed no files")
+	}
+}
+
 func TestImplementGuardSecurityOnGoFixture(t *testing.T) {
 	t.Parallel()
 	root, tmp := copyFixture(t, "go")

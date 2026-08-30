@@ -114,6 +114,10 @@ func TestBuildSelfRepositoryUsesLocalHarnessCommand(t *testing.T) {
 			t.Fatalf("self-hosted credential-free phases in %s do not use the checked-out harness command:\n%s", path, content)
 		}
 	}
+	dispatcher := operationContent(t, operations, ".github/workflows/sam-harness-merge-queue-dispatch.yml")
+	if !strings.Contains(dispatcher, "merge_group:") || !strings.Contains(dispatcher, "sam_harness_merge_group_review") || strings.Contains(dispatcher, "pull_request_target:") {
+		t.Fatalf("merge-queue dispatcher is incomplete:\n%s", dispatcher)
+	}
 	agents := operationContent(t, operations, ".github/workflows/sam-harness-agents.yml")
 	if strings.Contains(agents, "go run ./cmd/sam-harness") || !strings.Contains(agents, "go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v"+model.HarnessVersion) {
 		t.Fatalf("self-hosted secret-bearing control plane does not use the pinned trusted release:\n%s", agents)

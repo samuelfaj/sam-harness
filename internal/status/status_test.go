@@ -49,6 +49,29 @@ func TestEvaluateDoesNotPromoteLaterStatesFromLocalChecks(t *testing.T) {
 	}
 }
 
+func TestEvaluateProvesCIFromProviderChecksWithoutUsingLocalReceipts(t *testing.T) {
+	root := t.TempDir()
+	writeMinimalConfig(t, root)
+	initGit(t, root)
+	head, _, _, ok := repo.GitState(root)
+	if !ok || head == "" {
+		t.Fatal("expected git HEAD")
+	}
+	got, err := EvaluateWithOptions(root, Options{Checks: []ProviderCheck{
+		{Name: "static", SHA: head, Conclusion: "success"},
+		{Name: "test", SHA: head, Conclusion: "success"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !StateByName(got, StateCI).Proven {
+		t.Fatalf("CI should be proven from provider checks: %#v", StateByName(got, StateCI))
+	}
+	if StateByName(got, StateReview).Proven || StateByName(got, StateArtifact).Proven {
+		t.Fatalf("provider CI checks promoted later states: %#v", got)
+	}
+}
+
 func TestEvaluateRequiresMatchingPipelineReceiptsPerState(t *testing.T) {
 	root := t.TempDir()
 	writeMinimalConfig(t, root)

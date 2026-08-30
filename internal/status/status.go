@@ -54,9 +54,17 @@ type Report struct {
 	States      []StateReport `json:"states"`
 }
 
+type Options struct {
+	Checks []ProviderCheck
+}
+
 // Evaluate reports the evidence ladder for root. A later state is never marked
 // proven from an earlier receipt.
 func Evaluate(path string) (Report, error) {
+	return EvaluateWithOptions(path, Options{})
+}
+
+func EvaluateWithOptions(path string, options Options) (Report, error) {
 	root, err := repo.ResolveRoot(path)
 	if err != nil {
 		return Report{}, err
@@ -76,7 +84,7 @@ func Evaluate(path string) (Report, error) {
 	}
 	report := Report{Root: root, Head: head, Fingerprint: fingerprint}
 	for _, name := range Ladder {
-		report.States = append(report.States, evaluateState(name, root, fingerprint, head, dirty, gitOK, receipts))
+		report.States = append(report.States, evaluateState(name, root, fingerprint, head, dirty, gitOK, receipts, cfg, options.Checks))
 	}
 	return report, nil
 }
@@ -90,7 +98,7 @@ type storedReceipt struct {
 	ReviewHeadSHA string
 }
 
-func evaluateState(name, root, fingerprint, head string, dirty, gitOK bool, receipts []storedReceipt) StateReport {
+func evaluateState(name, root, fingerprint, head string, dirty, gitOK bool, receipts []storedReceipt, cfg model.Config, checks []ProviderCheck) StateReport {
 	unproven := func(reason string) StateReport {
 		return StateReport{Name: name, Reason: reason}
 	}
@@ -136,7 +144,14 @@ func evaluateState(name, root, fingerprint, head string, dirty, gitOK bool, rece
 				return StateReport{Name: name, Proven: true, Evidence: receipt.Path}
 			}
 		}
-		return unproven("CI is not proven from local receipts")
+		ok, evidence := ProveCI(head, requiredCIChecks(cfg), checks)
+		if ok {
+			return StateReport{Name: name, Proven: true, Evidence: evidence}
+		}
+		if evidence == "" {
+			evidence = "CI is not proven from local receipts"
+		}
+		return unproven(evidence)
 	case StateArtifact:
 		for _, receipt := range receipts {
 			if receipt.Kind == "pipeline" && receipt.Phase == string(model.PhaseArtifact) && receipt.Passed && receipt.Fingerprint == fingerprint {
@@ -247,6 +262,16 @@ func remoteContains(root, head string) bool {
 		return false
 	}
 	return strings.TrimSpace(string(output)) != ""
+}
+
+func requiredCIChecks(cfg model.Config) []string {
+	required := []string{"static", "test"}
+	for _, plane := range cfg.CI.AgentControlPlanes {
+		if name := strings.TrimSpace(plane.RequiredCheck); name != "" {
+			required = append(required, name)
+		}
+	}
+	return required
 }
 
 func StateByName(report Report, name string) StateReport {

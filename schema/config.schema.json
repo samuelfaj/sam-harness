@@ -404,7 +404,11 @@
         "browser_proof": { "type": "boolean" },
         "human_labels": { "type": "boolean" },
         "accessibility": { "type": "boolean" },
-        "localization": { "type": "boolean" }
+        "localization": { "type": "boolean" },
+        "browser_command": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "browser_waiver": { "type": "string" },
+        "accessibility_command": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "accessibility_waiver": { "type": "string" }
       }
     },
     "governance": {

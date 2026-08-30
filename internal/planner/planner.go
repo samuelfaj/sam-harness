@@ -85,11 +85,22 @@ func Create(scan model.ScanResult, requested model.Profile, answers model.Answer
 	if err := applyConfirmedGuardDefaults(answers.Workflow, proposedDefaults, answers.ConfirmGuardDefaults); err != nil {
 		return model.Plan{}, err
 	}
+	browserCommand, accessibilityCommand := uxCommandsFromScan(resolvedScan)
+	applyConfirmedUX(&answers, browserCommand, accessibilityCommand)
+	reviewerCommand := applyRuntimeReviewers(answers.Workflow, answers)
 	unresolved := answers.Missing(scan)
 	if unresolved == nil {
 		unresolved = []string{}
 	}
 	unresolved = append(unresolved, commandQuestions...)
+	if resolvedScan.HasUI && profileRank(applied) >= profileRank(model.ProfileProduction) {
+		if len(answers.BrowserCommand) == 0 && strings.TrimSpace(answers.BrowserWaiver) == "" {
+			unresolved = append(unresolved, "design.browser")
+		}
+		if len(answers.AccessibilityCommand) == 0 && strings.TrimSpace(answers.AccessibilityWaiver) == "" {
+			unresolved = append(unresolved, "design.accessibility")
+		}
+	}
 	if profileRank(applied) >= profileRank(model.ProfileProduction) {
 		if strings.TrimSpace(answers.ObservationWindow) == "" {
 			unresolved = append(unresolved, "observation_window")
@@ -173,19 +184,39 @@ func Create(scan model.ScanResult, requested model.Profile, answers model.Answer
 	sort.Strings(unresolved)
 	sort.Strings(deferred)
 	createdAt := time.Now().UTC()
+	host, proposedReviewer := proposedReviewerHost(answers)
+	if len(reviewerCommand) > 0 {
+		proposedReviewer = reviewerCommand
+		if answers.CIAgentRuntime != nil {
+			host = answers.CIAgentRuntime.Host
+		}
+	} else if answers.ConfirmRuntimeReviewers != nil && *answers.ConfirmRuntimeReviewers {
+		host = ""
+		proposedReviewer = nil
+	}
+	if len(answers.BrowserCommand) > 0 || strings.TrimSpace(answers.BrowserWaiver) != "" {
+		browserCommand = nil
+	}
+	if len(answers.AccessibilityCommand) > 0 || strings.TrimSpace(answers.AccessibilityWaiver) != "" {
+		accessibilityCommand = nil
+	}
 	plan := model.Plan{
-		PlanVersion:           "1",
-		CreatedAt:             createdAt,
-		ExpiresAt:             createdAt.Add(30 * time.Minute),
-		Root:                  scan.Root,
-		Fingerprint:           scan.Fingerprint,
-		RequestedProfile:      requested,
-		RecommendedProfile:    recommended,
-		AppliedProfile:        applied,
-		Answers:               answers,
-		Unresolved:            unresolved,
-		Deferred:              deferred,
-		ProposedGuardDefaults: undecidedProposedGuards(answers.Workflow, proposedDefaults),
+		PlanVersion:                  "1",
+		CreatedAt:                    createdAt,
+		ExpiresAt:                    createdAt.Add(30 * time.Minute),
+		Root:                         scan.Root,
+		Fingerprint:                  scan.Fingerprint,
+		RequestedProfile:             requested,
+		RecommendedProfile:           recommended,
+		AppliedProfile:               applied,
+		Answers:                      answers,
+		Unresolved:                   unresolved,
+		Deferred:                     deferred,
+		ProposedGuardDefaults:        undecidedProposedGuards(answers.Workflow, proposedDefaults),
+		ProposedReviewerHost:         host,
+		ProposedReviewerCommand:      proposedReviewer,
+		ProposedBrowserCommand:       browserCommand,
+		ProposedAccessibilityCommand: accessibilityCommand,
 	}
 	if len(unresolved) == 0 {
 		operations, err := render.Build(resolvedScan, applied, answers)
