@@ -282,11 +282,17 @@ func normalizeDesired(provider Provider, desired RemoteState) (RemoteState, erro
 		if strings.TrimSpace(desired.MergeQueueDispatch) == "" {
 			desired.MergeQueueDispatch = GitHubMergeQueueDispatch
 		}
+		if desired.Fields == nil {
+			desired.Fields = map[string]string{}
+		}
 		if strings.TrimSpace(desired.Fields["merge_queue_dispatch"]) == "" {
-			if desired.Fields == nil {
-				desired.Fields = map[string]string{}
-			}
 			desired.Fields["merge_queue_dispatch"] = GitHubMergeQueueDispatch
+		}
+		if desired.JobTexts == nil {
+			desired.JobTexts = map[string]string{}
+		}
+		if !dispatcherWorkflowComplete(desired.JobTexts["merge_queue_dispatch"]) {
+			desired.JobTexts["merge_queue_dispatch"] = MergeQueueDispatcherWorkflow()
 		}
 	}
 	if desired.RequiredApprovals < 1 {

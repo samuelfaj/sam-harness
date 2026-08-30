@@ -156,6 +156,20 @@ func detectPackageJSON(path, dir, root string) (model.Stack, error) {
 	deps := mergeKeys(pkg.Dependencies, pkg.DevDependencies)
 	ui := containsAny(deps, "react", "next", "vue", "@angular/core", "svelte", "solid-js", "astro")
 	persistence := containsAny(deps, "prisma", "typeorm", "sequelize", "mongoose", "knex", "drizzle-orm", "@supabase/supabase-js")
+	if containsAny(deps, "@playwright/test", "playwright") {
+		commands["browser"] = []string{"npx", "playwright", "test"}
+	} else if containsAny(deps, "cypress") {
+		if _, ok := pkg.Scripts["cypress"]; ok && manager != "" {
+			commands["browser"] = []string{manager, "run", "cypress"}
+		}
+	}
+	if containsAny(deps, "pa11y", "@axe-core/cli") {
+		if containsAny(deps, "pa11y") {
+			commands["accessibility"] = []string{"npx", "pa11y"}
+		} else {
+			commands["accessibility"] = []string{"npx", "@axe-core/cli"}
+		}
+	}
 	return model.Stack{Kind: "typescript", Path: dir, PackageManager: manager, Commands: commands, UI: ui, Persistence: persistence}, nil
 }
 

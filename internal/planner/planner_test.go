@@ -1045,6 +1045,62 @@ func TestEmptyCorePhaseStillBlocks(t *testing.T) {
 	}
 }
 
+func TestConfirmRuntimeReviewersFillsHostRecipe(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	answers.Workflow = completeWorkflow()
+	answers.Workflow.Reviewers = nil
+	answers.CIAgentRuntime = &model.CIAgentRuntime{Host: model.AgentHostCodex, LoginMethod: model.AgentLoginManual, LoginReason: "test"}
+	truth := true
+	answers.ConfirmRuntimeReviewers = &truth
+	answers.ReviewTimeoutSeconds = 120
+	plan, err := Create(model.ScanResult{Root: t.TempDir(), Fingerprint: "fingerprint"}, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(plan.Unresolved, "workflow.reviewers.architecture") {
+		t.Fatalf("runtime reviewers stayed unresolved: %v", plan.Unresolved)
+	}
+	if len(plan.Answers.Workflow.Reviewers) != len(model.ReviewerRoles) {
+		t.Fatalf("reviewers = %#v", plan.Answers.Workflow.Reviewers)
+	}
+	if plan.Answers.Workflow.Reviewers[0].TimeoutSeconds != 120 || plan.Answers.Workflow.Reviewers[0].Command[0] != "npx" {
+		t.Fatalf("recipe = %#v", plan.Answers.Workflow.Reviewers[0])
+	}
+}
+
+func TestProductionUIRequiresBrowserCommandOrWaiver(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	answers.Workflow = completeWorkflow()
+	answers.DesignSourceOfTruth = "repository"
+	scan := model.ScanResult{
+		Root: t.TempDir(), Fingerprint: "fingerprint", HasUI: true,
+		Stacks: []model.Stack{{Kind: "typescript", Path: ".", UI: true, Commands: map[string][]string{
+			"browser": {"npx", "playwright", "test"},
+		}}},
+	}
+	blocked, err := Create(scan, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(blocked.Unresolved, "design.browser") || !contains(blocked.Unresolved, "design.accessibility") {
+		t.Fatalf("Unresolved = %v, want UI proof decisions", blocked.Unresolved)
+	}
+	if len(blocked.ProposedBrowserCommand) == 0 {
+		t.Fatal("missing proposed browser command")
+	}
+	answers.ConfirmGuardDefaults = []string{"browser"}
+	answers.AccessibilityWaiver = "no axe command in this fixture"
+	resolved, err := Create(scan, model.ProfileProduction, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(resolved.Unresolved, "design.browser") || contains(resolved.Unresolved, "design.accessibility") {
+		t.Fatalf("confirmed UI proof stayed unresolved: %v", resolved.Unresolved)
+	}
+}
+
 func coreWorkflow() *model.WorkflowConfig {
 	workflow := completeWorkflow()
 	workflow.AdoptionPhase = model.AdoptionPhaseCore

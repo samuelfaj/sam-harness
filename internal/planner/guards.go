@@ -83,6 +83,9 @@ func applyConfirmedGuardDefaults(workflow *model.WorkflowConfig, proposed map[st
 			continue
 		}
 		if !knownGuardCategory(category) {
+			if category == "browser" || category == "accessibility" {
+				continue
+			}
 			return fmt.Errorf("confirm_guard_defaults contains unknown category %q", category)
 		}
 		if seen[category] {

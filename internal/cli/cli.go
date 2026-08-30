@@ -21,6 +21,7 @@ import (
 	"github.com/samuelfaj/sam-harness/internal/model"
 	pipelinerun "github.com/samuelfaj/sam-harness/internal/pipeline"
 	"github.com/samuelfaj/sam-harness/internal/planner"
+	"github.com/samuelfaj/sam-harness/internal/publish"
 	"github.com/samuelfaj/sam-harness/internal/scan"
 	"github.com/samuelfaj/sam-harness/internal/stage"
 	"github.com/samuelfaj/sam-harness/internal/status"
@@ -70,6 +71,8 @@ func (c *CLI) Run(args []string) error {
 		return c.freeze(args[1:])
 	case "status":
 		return c.status(args[1:])
+	case "publish":
+		return c.publish(args[1:])
 	case "version", "--version", "-v":
 		fmt.Fprintf(c.Stdout, "sam-harness %s\n", model.HarnessVersion)
 		return nil
@@ -559,11 +562,21 @@ func (c *CLI) stage(args []string) error {
 }
 
 func (c *CLI) status(args []string) error {
-	options, err := parseOptions(args, map[string]bool{"format": true})
+	options, err := parseOptions(args, map[string]bool{"format": true, "checks-file": true})
 	if err != nil {
 		return err
 	}
-	report, err := status.Evaluate(options.path())
+	var checks []status.ProviderCheck
+	if path := options.values["checks-file"]; path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(data, &checks); err != nil {
+			return fmt.Errorf("parse checks-file: %w", err)
+		}
+	}
+	report, err := status.EvaluateWithOptions(options.path(), status.Options{Checks: checks})
 	if err != nil {
 		return err
 	}
@@ -582,6 +595,46 @@ func (c *CLI) status(args []string) error {
 		}
 	}
 	return nil
+}
+
+func (c *CLI) publish(args []string) error {
+	options, err := parseOptions(args, map[string]bool{"format": true, "branch": true, "title": true, "body": true, "paths": true, "base": true})
+	if err != nil {
+		return err
+	}
+	paths := splitCLIList(options.values["paths"])
+	result, err := publish.Run(publish.Request{
+		Root:   options.path(),
+		Branch: options.values["branch"],
+		Title:  options.values["title"],
+		Body:   options.values["body"],
+		Paths:  paths,
+		Base:   options.values["base"],
+	})
+	if err != nil {
+		return err
+	}
+	if options.value("format", "human") == "json" {
+		return writeJSON(c.Stdout, result)
+	}
+	fmt.Fprintf(c.Stdout, "Branch: %s\nHEAD: %s\nPull request: %s\n", result.Branch, result.HeadSHA, result.URL)
+	fmt.Fprintln(c.Stdout, "CI, merge, and deployment remain unproven until provider receipts exist.")
+	return nil
+}
+
+func splitCLIList(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func (c *CLI) freeze(args []string) error {
@@ -968,6 +1021,24 @@ func mergeAnswers(base, provided model.Answers) model.Answers {
 	if provided.ConfirmGuardDefaults != nil {
 		base.ConfirmGuardDefaults = append([]string(nil), provided.ConfirmGuardDefaults...)
 	}
+	if provided.ConfirmRuntimeReviewers != nil {
+		base.ConfirmRuntimeReviewers = provided.ConfirmRuntimeReviewers
+	}
+	if provided.ReviewTimeoutSeconds > 0 {
+		base.ReviewTimeoutSeconds = provided.ReviewTimeoutSeconds
+	}
+	if provided.BrowserCommand != nil {
+		base.BrowserCommand = append([]string(nil), provided.BrowserCommand...)
+	}
+	if provided.BrowserWaiver != "" {
+		base.BrowserWaiver = provided.BrowserWaiver
+	}
+	if provided.AccessibilityCommand != nil {
+		base.AccessibilityCommand = append([]string(nil), provided.AccessibilityCommand...)
+	}
+	if provided.AccessibilityWaiver != "" {
+		base.AccessibilityWaiver = provided.AccessibilityWaiver
+	}
 	if provided.CIAgentRuntime != nil {
 		base.CIAgentRuntime = provided.CIAgentRuntime.Clone()
 	}
@@ -1071,7 +1142,8 @@ Usage:
   sam-harness bootstrap gitlab [path] [--accept plan-id] [--format human|json]
   sam-harness stage classifier|context|planning|implementation|review|repair --input file [--format human|json]
   sam-harness freeze check [path] [--policy file] [--now rfc3339] [--exception file] [--head sha] [--base sha] [--branch name] [--kind feature] [--scheduled-release true|false]
-  sam-harness status [path] [--format human|json]
+  sam-harness status [path] [--format human|json] [--checks-file file]
+  sam-harness publish [path] --branch name --title text --paths a,b [--body text] [--base sha]
   sam-harness check [path] [--format human|json] [--receipt true|false]
   sam-harness pipeline [path] [--config absolute-or-contained-file] [--review-base absolute-directory --review-base-sha hex --review-head-sha hex] [--risk low|medium|high|critical] --phase static|test|review|artifact|staging|production|observe|rollback|migration|all [--receipt true|false]
   sam-harness repair [path] [--config absolute-or-contained-file] --receipt file [--receipt-output true|false]

@@ -122,6 +122,7 @@ func Run(path string) (Report, error) {
 				path := ".github/workflows/sam-harness.yml"
 				requireFile(&report, root, path, fragments...)
 				validateGitHubWorkflow(&report, root, path, cfg)
+				requireFile(&report, root, ".github/workflows/sam-harness-merge-queue-dispatch.yml", "merge_group:", "sam_harness_merge_group_review")
 				if providerHasAgentBindings(cfg, "github") {
 					agentPath := ".github/workflows/sam-harness-agents.yml"
 					fragments := []string{"name: sam-harness agents", "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349"}

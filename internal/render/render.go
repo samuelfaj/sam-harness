@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/samuelfaj/sam-harness/internal/bootstrap"
 	"github.com/samuelfaj/sam-harness/internal/config"
 	"github.com/samuelfaj/sam-harness/internal/model"
 )
@@ -115,7 +116,8 @@ func Build(scan model.ScanResult, profile model.Profile, answers model.Answers) 
 			switch provider {
 			case "github":
 				githubFiles := map[string]string{
-					".github/workflows/sam-harness.yml": githubWorkflow(cfg),
+					".github/workflows/sam-harness.yml":                      githubWorkflow(cfg),
+					".github/workflows/sam-harness-merge-queue-dispatch.yml": bootstrap.MergeQueueDispatcherWorkflow(),
 				}
 				if providerHasAgentBindings(cfg, "github") {
 					githubFiles[".github/workflows/sam-harness-agents.yml"] = githubAgentsWorkflow(cfg)
@@ -190,7 +192,7 @@ func buildConfig(scan model.ScanResult, profile model.Profile, answers model.Ans
 		}
 	}
 	ciManaged := answers.AllowCIChanges != nil && *answers.AllowCIChanges && len(scan.CIProviders) > 0
-	return model.Config{
+	cfg := model.Config{
 		SchemaVersion:  model.SchemaVersion,
 		HarnessVersion: model.HarnessVersion,
 		Profile:        profile,
@@ -232,12 +234,16 @@ func buildConfig(scan model.ScanResult, profile model.Profile, answers model.Ans
 			RestoreTest:        production && (scan.HasPersistence || boolValue(answers.PersistentData)),
 		},
 		Design: model.DesignConfig{
-			Applicable:    scan.HasUI,
-			SourceOfTruth: answers.DesignSourceOfTruth,
-			BrowserProof:  scan.HasUI,
-			HumanLabels:   scan.HasUI,
-			Accessibility: scan.HasUI,
-			Localization:  scan.HasUI,
+			Applicable:           scan.HasUI,
+			SourceOfTruth:        answers.DesignSourceOfTruth,
+			BrowserProof:         scan.HasUI && len(answers.BrowserCommand) > 0,
+			HumanLabels:          scan.HasUI,
+			Accessibility:        scan.HasUI && (len(answers.AccessibilityCommand) > 0 || strings.TrimSpace(answers.AccessibilityWaiver) != ""),
+			Localization:         scan.HasUI,
+			BrowserCommand:       append([]string(nil), answers.BrowserCommand...),
+			BrowserWaiver:        answers.BrowserWaiver,
+			AccessibilityCommand: append([]string(nil), answers.AccessibilityCommand...),
+			AccessibilityWaiver:  answers.AccessibilityWaiver,
 		},
 		Governance: model.GovernanceConfig{
 			Approvers:          answers.Approvers,
@@ -252,6 +258,27 @@ func buildConfig(scan model.ScanResult, profile model.Profile, answers model.Ans
 			"generated_by": "sam-harness",
 		},
 	}
+	if len(answers.BrowserCommand) > 0 {
+		cfg.Gates = append(cfg.Gates, model.Gate{
+			Name:     "browser",
+			Stage:    "local",
+			Phase:    model.PhaseStatic,
+			Workdir:  ".",
+			Command:  append([]string(nil), answers.BrowserCommand...),
+			Required: true,
+		})
+	}
+	if len(answers.AccessibilityCommand) > 0 {
+		cfg.Gates = append(cfg.Gates, model.Gate{
+			Name:     "accessibility",
+			Stage:    "local",
+			Phase:    model.PhaseStatic,
+			Workdir:  ".",
+			Command:  append([]string(nil), answers.AccessibilityCommand...),
+			Required: true,
+		})
+	}
+	return cfg
 }
 
 func cloneWorkflow(workflow *model.WorkflowConfig) *model.WorkflowConfig {
@@ -1000,9 +1027,23 @@ func uxDocument(cfg model.Config) string {
 No user interface was detected. If a change introduces a user-facing surface, update the configuration and run sam-harness plan again.
 `
 	}
+	browser := "no executable browser command; record a waiver or confirm a detected Playwright/Cypress command"
+	if len(cfg.Design.BrowserCommand) > 0 {
+		browser = strings.Join(cfg.Design.BrowserCommand, " ")
+	} else if strings.TrimSpace(cfg.Design.BrowserWaiver) != "" {
+		browser = "waiver: " + cfg.Design.BrowserWaiver
+	}
+	a11y := "no executable accessibility command; record a waiver or confirm a detected axe/pa11y command"
+	if len(cfg.Design.AccessibilityCommand) > 0 {
+		a11y = strings.Join(cfg.Design.AccessibilityCommand, " ")
+	} else if strings.TrimSpace(cfg.Design.AccessibilityWaiver) != "" {
+		a11y = "waiver: " + cfg.Design.AccessibilityWaiver
+	}
 	return fmt.Sprintf(`# User experience gates
 
 Design source of truth: %s
+Browser proof: %s
+Accessibility proof: %s
 
 - [ ] Inspect existing components, tokens, layouts, and interaction patterns before designing.
 - [ ] Reuse the system's typography, spacing, color, component, and motion rules.
@@ -1012,9 +1053,11 @@ Design source of truth: %s
 - [ ] Localize visible copy and accessible names for supported locales.
 - [ ] Confirm destructive actions and provide recovery when recovery is possible.
 - [ ] Capture browser or device evidence at the widths and states affected by the change.
+- [ ] Run the configured browser command or honor the recorded waiver.
+- [ ] Run the configured accessibility command or honor the recorded waiver.
 
 Do not claim design completion without evidence from the configured source of truth and the rendered interface.
-`, cfg.Design.SourceOfTruth)
+`, cfg.Design.SourceOfTruth, browser, a11y)
 }
 
 func releaseRunbook(cfg model.Config) string {

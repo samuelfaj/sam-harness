@@ -27,8 +27,8 @@ func TestVersionPrintsHarnessVersion(t *testing.T) {
 	if stdout.String() != want {
 		t.Fatalf("version = %q, want %q", stdout.String(), want)
 	}
-	if model.HarnessVersion != "0.4.0" {
-		t.Fatalf("HarnessVersion = %q, want 0.4.0 for this release", model.HarnessVersion)
+	if model.HarnessVersion != "0.5.0" {
+		t.Fatalf("HarnessVersion = %q, want 0.5.0 for this release", model.HarnessVersion)
 	}
 }
 
@@ -70,6 +70,7 @@ func TestUsageDocumentsV03Commands(t *testing.T) {
 		"sam-harness stage classifier|context|planning|implementation|review|repair",
 		"sam-harness freeze check",
 		"sam-harness status",
+		"sam-harness publish",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("help omitted %q:\n%s", want, output)
