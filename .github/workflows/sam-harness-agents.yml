@@ -235,7 +235,7 @@ jobs:
           test "$conclusion" = success
 
   repair_review:
-    if: always() && github.event_name == 'pull_request_target' && needs.resolve.result == 'success' && needs.review.result == 'failure' && !startsWith(needs.resolve.outputs.head_ref, 'sam-harness/repair-')
+    if: always() && github.event_name == 'pull_request_target' && needs.resolve.result == 'success' && needs.review.result == 'failure' && !startsWith(needs.resolve.outputs.head_ref, 'sam-harness/repair/')
     needs: [resolve, review]
     runs-on: ubuntu-latest
     environment:

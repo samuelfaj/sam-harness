@@ -213,6 +213,73 @@ func TestReviewRepairRequiresIntactManifestAndIncludesEveryActionInPrompt(t *tes
 	}
 }
 
+func TestReviewRepairAppliesEveryManifestActionInOneAttempt(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "first.txt", "broken first\n")
+	writeFile(t, root, "second.txt", "broken second\n")
+	writeExecutable(t, root, "repair.sh", `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'fix first file'*'fix second file'*) ;;
+  *) exit 41 ;;
+esac
+printf 'fixed first\n' > first.txt
+printf 'fixed second\n' > second.txt
+`)
+	writeExecutable(t, root, "static.sh", `#!/bin/sh
+grep -q '^fixed first$' first.txt
+grep -q '^fixed second$' second.txt
+`)
+	writeExecutable(t, root, "test.sh", `#!/bin/sh
+grep -q '^fixed first$' first.txt
+grep -q '^fixed second$' second.txt
+`)
+	cfg := testPipelineConfig()
+	cfg.Workflow.Correction = model.CorrectionConfig{
+		Enabled: true, FilesystemSandboxed: true, Command: []string{"./repair.sh"},
+		MaxAttempts: 1, MaxChangedFiles: 2, MaxChangedLines: 4, BranchPrefix: "sam-repair/",
+	}
+	cfg.Gates = []model.Gate{
+		{Name: "static", Stage: "local", Phase: model.PhaseStatic, Workdir: ".", Command: []string{"./static.sh"}, Required: true},
+		{Name: "test", Stage: "local", Phase: model.PhaseTest, Workdir: ".", Command: []string{"./test.sh"}, Required: true},
+	}
+	writePipelineConfig(t, root, cfg)
+	failedPath := writeFailedReceipt(t, root)
+	var failed Receipt
+	if err := json.Unmarshal([]byte(readFile(t, failedPath)), &failed); err != nil {
+		t.Fatal(err)
+	}
+	failed.Phase = model.PhaseReview
+	failed.Status = StatusBlocked
+	failed.Error = "review blocked by complete findings"
+	failed.ReviewBaseSHA = strings.Repeat("a", 40)
+	failed.ReviewBaseFingerprint = strings.Repeat("b", sha256.Size*2)
+	failed.ReviewHeadSHA = strings.Repeat("c", 40)
+	failed.ReviewHeadFingerprint = failed.Fingerprint
+	failed.ReviewPatchSHA256 = strings.Repeat("d", sha256.Size*2)
+	failed.Findings = []Finding{
+		{Role: model.ReviewerCorrectness, Severity: "P1", Summary: "first is broken", Evidence: "first.txt:1", Path: "first.txt", Line: 1, RequiredChange: "fix first file", Acceptance: "first file is fixed"},
+		{Role: model.ReviewerBusinessRules, Severity: "P2", Summary: "second is broken", Evidence: "second.txt:1", Path: "second.txt", Line: 1, RequiredChange: "fix second file", Acceptance: "second file is fixed"},
+	}
+	if err := attachRepairManifest(&failed); err != nil {
+		t.Fatal(err)
+	}
+	reviewReceiptPath := filepath.Join(root, cfg.Evidence.ReceiptDirectory, receiptFilename(failed))
+	writeReceiptAt(t, reviewReceiptPath, failed)
+
+	receipt, _, err := RepairWithConfig(root, "", reviewReceiptPath, false)
+	if err != nil {
+		t.Fatalf("multi-action review repair failed: %v\n%#v", err, receipt)
+	}
+	if len(receipt.Attempts) != 1 || readFile(t, filepath.Join(root, "first.txt")) != "fixed first\n" || readFile(t, filepath.Join(root, "second.txt")) != "fixed second\n" {
+		t.Fatalf("review repair did not apply every action in one attempt: %#v", receipt)
+	}
+	patch := readFile(t, receipt.RepairPatch)
+	if !strings.Contains(patch, "first.txt") || !strings.Contains(patch, "second.txt") {
+		t.Fatalf("review repair patch omitted an action: %s", patch)
+	}
+}
+
 func TestRepairTrustedConfigOverrideGovernsPRWorktree(t *testing.T) {
 	root := t.TempDir()
 	exfilMarker := filepath.Join(t.TempDir(), "pr-repair-ran")

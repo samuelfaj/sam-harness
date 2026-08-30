@@ -395,7 +395,8 @@ func validateGitHubAgentsWorkflow(report *Report, root, path string, cfg model.C
 		}
 		if cfg.Authority.Network {
 			if repairReviewSection != "" {
-				requireFragments(report, path, repairReviewSection, "github.event_name == 'pull_request_target'")
+				branchPrefix := "'" + strings.ReplaceAll(cfg.Workflow.Correction.BranchPrefix, "'", "''") + "'"
+				requireFragments(report, path, repairReviewSection, "github.event_name == 'pull_request_target'", "!startsWith(needs.resolve.outputs.head_ref, "+branchPrefix+")", `test "$(jq -r '.status' "$receipt")" = blocked`)
 				forbidFragments(report, path, repairReviewSection, "github.event_name == 'merge_group'", "github.event_name == 'repository_dispatch'")
 			}
 			if repairBound {
