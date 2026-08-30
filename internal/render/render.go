@@ -875,6 +875,7 @@ func reviewerOutputSchema() string {
   "required": ["review_complete", "findings"],
   "properties": {
     "review_complete": {
+      "type": "boolean",
       "const": true
     },
     "findings": {

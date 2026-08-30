@@ -25,7 +25,7 @@ func TestBuildGeneratesExhaustiveReviewerOutputSchema(t *testing.T) {
 	if err := json.Unmarshal([]byte(content), &schema); err != nil {
 		t.Fatalf("reviewer output schema is not JSON: %v", err)
 	}
-	for _, required := range []string{`"review_complete"`, `"required_change"`, `"acceptance"`, `"const": true`} {
+	for _, required := range []string{`"review_complete"`, `"type": "boolean"`, `"required_change"`, `"acceptance"`, `"const": true`} {
 		if !strings.Contains(content, required) {
 			t.Fatalf("reviewer output schema lacks %s:\n%s", required, content)
 		}
