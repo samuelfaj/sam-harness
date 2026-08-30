@@ -680,6 +680,12 @@ func TestBuildSeparatesRepairSecretsFromUntrustedPhaseJobs(t *testing.T) {
 	if !strings.Contains(reviewRepair, "!startsWith(needs.resolve.outputs.head_ref, 'sam-harness/repair-')") {
 		t.Fatalf("trusted review repair can recursively repair its own branch:\n%s", reviewRepair)
 	}
+	resolve := contentSection(t, agents, "  resolve:\n", "  start_review_check:\n")
+	for _, expected := range []string{`head_ref="$(printf '%s' "$pull" | jq -r '.head.ref')"`, `head_ref=%s\n' "$head_sha" "$base_sha" "$pr_number" "$SOURCE_RUN_ID" "$head_ref"`} {
+		if !strings.Contains(resolve, expected) {
+			t.Fatalf("trusted resolver does not publish the provider-owned pull-request branch %q:\n%s", expected, resolve)
+		}
+	}
 
 	gitlab := operationContent(t, operations, ".sam-harness/ci/gitlab.yml")
 	for _, forbidden := range []string{"REPAIR_ENV", "REPAIR_API_KEY", "sam-harness-repair-static:", "sam-harness-publish-repair:"} {
@@ -698,7 +704,7 @@ func TestBuildLimitsCredentialFreeReviewRepairToOnePass(t *testing.T) {
 
 	github := operationContent(t, operations, ".github/workflows/sam-harness.yml")
 	repair := contentSection(t, github, "  repair_review:\n", "  repair_artifact:\n")
-	if !strings.Contains(repair, "!startsWith(github.head_ref, 'sam-harness/repair-')") {
+	if !strings.Contains(repair, "!startsWith(github.head_ref || github.ref_name, 'sam-harness/repair-')") {
 		t.Fatalf("credential-free GitHub review repair can recurse:\n%s", repair)
 	}
 

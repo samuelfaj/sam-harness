@@ -1911,7 +1911,7 @@ func writeGitHubRepairJob(builder *strings.Builder, cfg model.Config, phase mode
 	if cfg.Authority.Network {
 		condition := fmt.Sprintf("always() && github.event_name != 'workflow_dispatch' && needs.%s.result == 'failure'", phase)
 		if phase == model.PhaseReview {
-			condition += " && !startsWith(github.head_ref, " + yamlSingle(cfg.Workflow.Correction.BranchPrefix) + ")"
+			condition += " && !startsWith(github.head_ref || github.ref_name, " + yamlSingle(cfg.Workflow.Correction.BranchPrefix) + ")"
 		}
 		builder.WriteString("    if: " + condition + "\n")
 	} else {
