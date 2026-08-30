@@ -119,6 +119,7 @@ func TestReviewRepairRequiresIntactManifestAndIncludesEveryActionInPrompt(t *tes
 	failed.Phase = model.PhaseReview
 	failed.Error = "review blocked by P1 findings"
 	failed.ReviewBaseSHA = strings.Repeat("a", 40)
+	failed.ReviewBaseFingerprint = strings.Repeat("d", sha256.Size*2)
 	failed.ReviewHeadSHA = strings.Repeat("b", 40)
 	failed.ReviewHeadFingerprint = failed.Fingerprint
 	failed.ReviewPatchSHA256 = strings.Repeat("c", sha256.Size*2)
@@ -145,13 +146,14 @@ func TestReviewRepairRequiresIntactManifestAndIncludesEveryActionInPrompt(t *tes
 		t.Fatal(err)
 	}
 	var decoded struct {
-		Instruction    string          `json:"instruction"`
-		RepairManifest *RepairManifest `json:"repair_manifest"`
+		Instruction      string          `json:"instruction"`
+		TopLevelManifest *RepairManifest `json:"repair_manifest"`
+		FailedReceipt    Receipt         `json:"failed_receipt"`
 	}
 	if err := json.Unmarshal(prompt, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.RepairManifest == nil || len(decoded.RepairManifest.Actions) != 2 || !strings.Contains(decoded.Instruction, "every listed action") {
+	if decoded.TopLevelManifest != nil || decoded.FailedReceipt.RepairManifest == nil || len(decoded.FailedReceipt.RepairManifest.Actions) != 2 || !strings.Contains(decoded.Instruction, "every verified action") {
 		t.Fatalf("correction prompt omitted consolidated actions: %s", prompt)
 	}
 
@@ -163,12 +165,51 @@ func TestReviewRepairRequiresIntactManifestAndIncludesEveryActionInPrompt(t *tes
 	}
 	tampered = failed
 	manifestCopy := *failed.RepairManifest
-	manifestCopy.Actions = append([]RepairAction(nil), failed.RepairManifest.Actions...)
+	manifestCopy.Actions = append([]Finding(nil), failed.RepairManifest.Actions...)
 	manifestCopy.Actions[0].Acceptance = "different acceptance"
 	tampered.RepairManifest = &manifestCopy
 	writeReceiptAt(t, reviewReceiptPath, tampered)
 	if _, _, err := loadFailedReceipt(root, cfg, reviewReceiptPath, failed.Fingerprint, hex.EncodeToString(configDigest[:])); err == nil || !strings.Contains(err.Error(), "actions do not match findings") {
 		t.Fatalf("tampered review manifest was accepted: %v", err)
+	}
+
+	for _, test := range []struct {
+		name       string
+		mutate     func(*Receipt)
+		errorMatch string
+	}{
+		{name: "digest", mutate: func(receipt *Receipt) { receipt.RepairManifestSHA256 = strings.Repeat("0", sha256.Size*2) }, errorMatch: "digest does not match"},
+		{name: "base fingerprint", mutate: func(receipt *Receipt) { receipt.RepairManifest.ReviewBaseFingerprint = "different" }, errorMatch: "lineage does not match"},
+		{name: "empty actions", mutate: func(receipt *Receipt) { receipt.RepairManifest.Actions = nil }, errorMatch: "actions do not match findings"},
+		{name: "invalid action", mutate: func(receipt *Receipt) { receipt.RepairManifest.Actions[0].Path = "../escape" }, errorMatch: "invalid"},
+		{name: "no blocker", mutate: func(receipt *Receipt) {
+			for index := range receipt.Findings {
+				receipt.Findings[index].Severity = "P2"
+				receipt.RepairManifest.Actions[index].Severity = "P2"
+			}
+			digest, digestErr := repairManifestDigest(*receipt.RepairManifest)
+			if digestErr != nil {
+				t.Fatal(digestErr)
+			}
+			receipt.RepairManifestSHA256 = digest
+		}, errorMatch: "no blocking finding"},
+		{name: "arbiter conflict", mutate: func(receipt *Receipt) { receipt.ArbiterBlocked = true }, errorMatch: "conflicting review findings"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			raw, err := json.Marshal(failed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var candidate Receipt
+			if err := json.Unmarshal(raw, &candidate); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&candidate)
+			writeReceiptAt(t, reviewReceiptPath, candidate)
+			if _, _, err := loadFailedReceipt(root, cfg, reviewReceiptPath, failed.Fingerprint, hex.EncodeToString(configDigest[:])); err == nil || !strings.Contains(err.Error(), test.errorMatch) {
+				t.Fatalf("tampered review receipt was accepted: %v", err)
+			}
+		})
 	}
 }
 

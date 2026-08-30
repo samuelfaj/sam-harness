@@ -55,25 +55,21 @@ type Finding struct {
 	Severity       string             `json:"severity"`
 	Summary        string             `json:"summary"`
 	Evidence       string             `json:"evidence"`
-	Path           string             `json:"path,omitempty"`
-	Line           int                `json:"line,omitempty"`
+	Path           string             `json:"path"`
+	Line           int                `json:"line"`
 	RequiredChange string             `json:"required_change"`
 	Acceptance     string             `json:"acceptance"`
 }
 
-type RepairAction struct {
-	ID string `json:"id"`
-	Finding
-}
-
 type RepairManifest struct {
-	SchemaVersion         string         `json:"schema_version"`
-	Repository            string         `json:"repository"`
-	ReviewBaseSHA         string         `json:"review_base_sha,omitempty"`
-	ReviewHeadSHA         string         `json:"review_head_sha,omitempty"`
-	ReviewHeadFingerprint string         `json:"review_head_fingerprint"`
-	ReviewPatchSHA256     string         `json:"review_patch_sha256,omitempty"`
-	Actions               []RepairAction `json:"actions"`
+	SchemaVersion         string    `json:"schema_version"`
+	Repository            string    `json:"repository"`
+	ReviewBaseSHA         string    `json:"review_base_sha,omitempty"`
+	ReviewBaseFingerprint string    `json:"review_base_fingerprint,omitempty"`
+	ReviewHeadSHA         string    `json:"review_head_sha,omitempty"`
+	ReviewHeadFingerprint string    `json:"review_head_fingerprint"`
+	ReviewPatchSHA256     string    `json:"review_patch_sha256,omitempty"`
+	Actions               []Finding `json:"actions"`
 }
 
 type ArtifactEvidence struct {
@@ -262,6 +258,11 @@ func RunWithOptions(path string, phase model.Phase, writeReceipt bool, options R
 			receipt.ReviewHeadFingerprint = phaseReceipt.ReviewHeadFingerprint
 			receipt.ReviewPatch = phaseReceipt.ReviewPatch
 			receipt.ReviewPatchSHA256 = phaseReceipt.ReviewPatchSHA256
+			receipt.RepairManifest = phaseReceipt.RepairManifest
+			receipt.RepairManifestSHA256 = phaseReceipt.RepairManifestSHA256
+			receipt.ReviewRisk = phaseReceipt.ReviewRisk
+			receipt.ArbiterBlocked = phaseReceipt.ArbiterBlocked
+			receipt.ArbiterReason = phaseReceipt.ArbiterReason
 		}
 		if phaseReceipt.Artifact != nil {
 			artifact = phaseReceipt.Artifact
@@ -868,9 +869,19 @@ func validateReviewerSet(reviewers []model.ReviewerConfig) error {
 }
 
 func parseReviewerOutput(stdout string, role model.ReviewerRole) ([]Finding, error) {
+	type reviewerFinding struct {
+		Role           model.ReviewerRole `json:"role"`
+		Severity       string             `json:"severity"`
+		Summary        string             `json:"summary"`
+		Evidence       string             `json:"evidence"`
+		Path           *string            `json:"path"`
+		Line           *int               `json:"line"`
+		RequiredChange string             `json:"required_change"`
+		Acceptance     string             `json:"acceptance"`
+	}
 	var result struct {
-		ReviewComplete bool      `json:"review_complete"`
-		Findings       []Finding `json:"findings"`
+		ReviewComplete bool              `json:"review_complete"`
+		Findings       []reviewerFinding `json:"findings"`
 	}
 	decoder := json.NewDecoder(strings.NewReader(stdout))
 	decoder.DisallowUnknownFields()
@@ -890,20 +901,24 @@ func parseReviewerOutput(stdout string, role model.ReviewerRole) ([]Finding, err
 		}
 		return nil, fmt.Errorf("malformed reviewer output for %s: %w", role, err)
 	}
-	for index, finding := range result.Findings {
+	findings := make([]Finding, len(result.Findings))
+	for index, raw := range result.Findings {
+		if raw.Path == nil || raw.Line == nil {
+			return nil, fmt.Errorf("malformed reviewer output for %s: finding %d must include path and line", role, index)
+		}
+		finding := Finding{
+			Role: raw.Role, Severity: raw.Severity, Summary: raw.Summary, Evidence: raw.Evidence,
+			Path: *raw.Path, Line: *raw.Line, RequiredChange: raw.RequiredChange, Acceptance: raw.Acceptance,
+		}
 		if finding.Role != role {
 			return nil, fmt.Errorf("malformed reviewer output for %s: finding %d has role %q", role, index, finding.Role)
 		}
-		switch finding.Severity {
-		case "P0", "P1", "P2", "P3":
-		default:
-			return nil, fmt.Errorf("malformed reviewer output for %s: finding %d has severity %q", role, index, finding.Severity)
+		if err := validateFinding(finding); err != nil {
+			return nil, fmt.Errorf("malformed reviewer output for %s: finding %d: %w", role, index, err)
 		}
-		if strings.TrimSpace(finding.Summary) == "" || strings.TrimSpace(finding.Evidence) == "" || strings.TrimSpace(finding.RequiredChange) == "" || strings.TrimSpace(finding.Acceptance) == "" || finding.Line < 0 {
-			return nil, fmt.Errorf("malformed reviewer output for %s: finding %d is incomplete", role, index)
-		}
+		findings[index] = finding
 	}
-	return result.Findings, nil
+	return findings, nil
 }
 
 func runArtifact(root string, cfg model.Config, receipt *Receipt) error {
