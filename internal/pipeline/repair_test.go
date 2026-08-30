@@ -107,6 +107,71 @@ printf 'test\n' >> "$1"
 	}
 }
 
+func TestReviewRepairRequiresIntactManifestAndIncludesEveryActionInPrompt(t *testing.T) {
+	root := t.TempDir()
+	cfg := testPipelineConfig()
+	writePipelineConfig(t, root, cfg)
+	testReceiptPath := writeFailedReceipt(t, root)
+	var failed Receipt
+	if err := json.Unmarshal([]byte(readFile(t, testReceiptPath)), &failed); err != nil {
+		t.Fatal(err)
+	}
+	failed.Phase = model.PhaseReview
+	failed.Error = "review blocked by P1 findings"
+	failed.ReviewBaseSHA = strings.Repeat("a", 40)
+	failed.ReviewHeadSHA = strings.Repeat("b", 40)
+	failed.ReviewHeadFingerprint = failed.Fingerprint
+	failed.ReviewPatchSHA256 = strings.Repeat("c", sha256.Size*2)
+	failed.Findings = []Finding{
+		{Role: model.ReviewerSecurity, Severity: "P1", Summary: "unsafe input", Evidence: "input.go:4", Path: "input.go", Line: 4, RequiredChange: "validate input", Acceptance: "invalid input is rejected"},
+		{Role: model.ReviewerSimplicity, Severity: "P2", Summary: "duplicate branch", Evidence: "input.go:8", Path: "input.go", Line: 8, RequiredChange: "remove the duplicate branch", Acceptance: "one branch remains"},
+	}
+	if err := attachRepairManifest(&failed); err != nil {
+		t.Fatal(err)
+	}
+	reviewReceiptPath := filepath.Join(root, cfg.Evidence.ReceiptDirectory, receiptFilename(failed))
+	writeReceiptAt(t, reviewReceiptPath, failed)
+	rawConfig, err := os.ReadFile(filepath.Join(root, ".sam-harness", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configDigest := sha256.Sum256(rawConfig)
+	_, loaded, err := loadFailedReceipt(root, cfg, reviewReceiptPath, failed.Fingerprint, hex.EncodeToString(configDigest[:]))
+	if err != nil {
+		t.Fatalf("intact review manifest was rejected: %v", err)
+	}
+	prompt, err := correctionPrompt(root, failed.Fingerprint, model.CorrectionConfig{MaxAttempts: 1, MaxChangedFiles: 2, MaxChangedLines: 4}, 1, loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Instruction    string          `json:"instruction"`
+		RepairManifest *RepairManifest `json:"repair_manifest"`
+	}
+	if err := json.Unmarshal(prompt, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.RepairManifest == nil || len(decoded.RepairManifest.Actions) != 2 || !strings.Contains(decoded.Instruction, "every listed action") {
+		t.Fatalf("correction prompt omitted consolidated actions: %s", prompt)
+	}
+
+	tampered := failed
+	tampered.RepairManifest = nil
+	writeReceiptAt(t, reviewReceiptPath, tampered)
+	if _, _, err := loadFailedReceipt(root, cfg, reviewReceiptPath, failed.Fingerprint, hex.EncodeToString(configDigest[:])); err == nil || !strings.Contains(err.Error(), "no complete repair manifest") {
+		t.Fatalf("review receipt without manifest was accepted: %v", err)
+	}
+	tampered = failed
+	manifestCopy := *failed.RepairManifest
+	manifestCopy.Actions = append([]RepairAction(nil), failed.RepairManifest.Actions...)
+	manifestCopy.Actions[0].Acceptance = "different acceptance"
+	tampered.RepairManifest = &manifestCopy
+	writeReceiptAt(t, reviewReceiptPath, tampered)
+	if _, _, err := loadFailedReceipt(root, cfg, reviewReceiptPath, failed.Fingerprint, hex.EncodeToString(configDigest[:])); err == nil || !strings.Contains(err.Error(), "actions do not match findings") {
+		t.Fatalf("tampered review manifest was accepted: %v", err)
+	}
+}
+
 func TestRepairTrustedConfigOverrideGovernsPRWorktree(t *testing.T) {
 	root := t.TempDir()
 	exfilMarker := filepath.Join(t.TempDir(), "pr-repair-ran")

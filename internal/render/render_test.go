@@ -1,6 +1,7 @@
 package render
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,24 @@ import (
 	"github.com/samuelfaj/sam-harness/internal/pipeline"
 	"gopkg.in/yaml.v3"
 )
+
+func TestBuildGeneratesExhaustiveReviewerOutputSchema(t *testing.T) {
+	t.Parallel()
+	operations, err := Build(model.ScanResult{Root: t.TempDir()}, model.ProfileBaseline, answers())
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := operationContent(t, operations, ".sam-harness/reviewer-output.schema.json")
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(content), &schema); err != nil {
+		t.Fatalf("reviewer output schema is not JSON: %v", err)
+	}
+	for _, required := range []string{`"review_complete"`, `"required_change"`, `"acceptance"`, `"const": true`} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("reviewer output schema lacks %s:\n%s", required, content)
+		}
+	}
+}
 
 func TestBuildPreservesExistingInstructions(t *testing.T) {
 	t.Parallel()

@@ -137,7 +137,7 @@ jobs:
         run: |
           set -eu
           test -s "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" || { echo 'trusted base .sam-harness/config.yaml is unavailable; initial adoption fails closed' >&2; exit 1; }
-          go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.5.0 help >/dev/null || { echo 'released sam-harness v0.5.0 is unavailable; release it before enabling secret-bearing CI' >&2; exit 1; }
+          go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.6.0 help >/dev/null || { echo 'released sam-harness v0.6.0 is unavailable; release it before enabling secret-bearing CI' >&2; exit 1; }
       - name: Run six-role review from trusted base control plane
         id: phase
         continue-on-error: true
@@ -147,7 +147,7 @@ jobs:
           set -eu
           test -n "${OPENAI_API_KEY:-}" || { echo "required protected environment secret OPENAI_API_KEY is unavailable; fork and untrusted pull requests fail closed" >&2; exit 1; }
           set +e
-          output="$(go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.5.0 pipeline "${GITHUB_WORKSPACE}/target" --config "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" --review-base "${GITHUB_WORKSPACE}/trusted-control" --review-base-sha "${{ needs.resolve.outputs.base_sha }}" --review-head-sha "${{ needs.resolve.outputs.head_sha }}" --phase review --receipt true 2>&1)"
+          output="$(go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.6.0 pipeline "${GITHUB_WORKSPACE}/target" --config "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" --review-base "${GITHUB_WORKSPACE}/trusted-control" --review-base-sha "${{ needs.resolve.outputs.base_sha }}" --review-head-sha "${{ needs.resolve.outputs.head_sha }}" --phase review --receipt true 2>&1)"
           status=$?
           set -e
           printf '%s\n' "$output"
@@ -261,7 +261,7 @@ jobs:
         run: |
           set -eu
           test -s "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" || { echo 'trusted base .sam-harness/config.yaml is unavailable; initial adoption fails closed' >&2; exit 1; }
-          go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.5.0 help >/dev/null || { echo 'released sam-harness v0.5.0 is unavailable; release it before enabling secret-bearing CI' >&2; exit 1; }
+          go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.6.0 help >/dev/null || { echo 'released sam-harness v0.6.0 is unavailable; release it before enabling secret-bearing CI' >&2; exit 1; }
       - name: Restore exact failed trusted review receipt
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -278,7 +278,7 @@ jobs:
           test "$receipt_count" -eq 1
           receipt="$(find "${GITHUB_WORKSPACE}/target/.sam-harness/evidence/repair-input" -type f -name '*-pipeline-review.json' -print)"
           test "$(jq -r '.status' "$receipt")" = failed
-          repair_output="$(go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.5.0 repair "${GITHUB_WORKSPACE}/target" --config "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" --receipt "$receipt" --receipt-output true 2>&1)"
+          repair_output="$(go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.6.0 repair "${GITHUB_WORKSPACE}/target" --config "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" --receipt "$receipt" --receipt-output true 2>&1)"
           printf '%s\n' "$repair_output"
           repair_receipt="$(printf '%s\n' "$repair_output" | sed -n 's/^Receipt: //p' | tail -n 1)"
           test -n "$repair_receipt"
@@ -333,7 +333,7 @@ jobs:
         run: |
           set -eu
           test -s "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" || { echo 'trusted base .sam-harness/config.yaml is unavailable; initial adoption fails closed' >&2; exit 1; }
-          go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.5.0 help >/dev/null || { echo 'released sam-harness v0.5.0 is unavailable; release it before enabling secret-bearing CI' >&2; exit 1; }
+          go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.6.0 help >/dev/null || { echo 'released sam-harness v0.6.0 is unavailable; release it before enabling secret-bearing CI' >&2; exit 1; }
       - name: Restore exact triggering run receipts as untrusted data
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -360,7 +360,7 @@ jobs:
           done
           test "$(wc -l < "$receipt_list" | tr -d '[:space:]')" -eq 1 || { echo 'triggering run must contain exactly one failed static, test, or artifact receipt' >&2; exit 1; }
           receipt="$(cat "$receipt_list")"
-          repair_output="$(go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.5.0 repair "${GITHUB_WORKSPACE}/target" --config "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" --receipt "$receipt" --receipt-output true 2>&1)"
+          repair_output="$(go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.6.0 repair "${GITHUB_WORKSPACE}/target" --config "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" --receipt "$receipt" --receipt-output true 2>&1)"
           printf '%s\n' "$repair_output"
           repair_receipt="$(printf '%s\n' "$repair_output" | sed -n 's/^Receipt: //p' | tail -n 1)"
           test -n "$repair_receipt"

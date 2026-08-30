@@ -2,14 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["findings"],
+  "required": ["review_complete", "findings"],
   "properties": {
+    "review_complete": {
+      "const": true
+    },
     "findings": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["role", "severity", "summary", "evidence", "path", "line"],
+        "required": ["role", "severity", "summary", "evidence", "path", "line", "required_change", "acceptance"],
         "properties": {
           "role": {
             "enum": [
@@ -38,6 +41,14 @@
           "line": {
             "type": "integer",
             "minimum": 0
+          },
+          "required_change": {
+            "type": "string",
+            "minLength": 1
+          },
+          "acceptance": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }

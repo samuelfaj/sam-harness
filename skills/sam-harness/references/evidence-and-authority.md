@@ -8,7 +8,7 @@ Keep these states separate:
 2. Local checks passed against that source state.
 3. A commit contains the checked source.
 4. The expected remote branch contains that commit.
-5. Pre-merge review findings and approvals refer to the exact provider base/head SHAs, fingerprints, and canonical patch SHA-256.
+5. Pre-merge review findings, the complete hashed repair manifest, and approvals refer to the exact provider base/head SHAs, fingerprints, and canonical patch SHA-256.
 6. Required CI jobs passed for that commit.
 7. An immutable artifact was built from that CI state.
 8. The target environment reports that artifact digest.
@@ -41,7 +41,7 @@ Provider-bound agent secrets also require an external command boundary. The cano
 
 Stop on missing evidence, scope drift, stale plans, ambiguous destructive targets, or required gate failures. Preserve the real error and the relevant receipt. Prefer reversible operations. A code rollback is not a data rollback; check compatibility and recovery state first.
 
-Receipts are immutable evidence about one execution, not reusable permission. Preserve the repository fingerprint, timestamps, command argv, findings, review base/head fingerprints and patch hash, artifact/SBOM/provenance hashes, source fingerprint, repair patch hash when applicable, and exact final status. A blocked receipt never proves a later phase.
+Receipts are immutable evidence about one execution, not reusable permission. Preserve the repository fingerprint, timestamps, command argv, findings, complete repair manifest and its hash, review base/head fingerprints and patch hash, artifact/SBOM/provenance hashes, source fingerprint, repair patch hash when applicable, and exact final status. A blocked receipt never proves a later phase. A manifest prescribes one bounded correction; only a fresh independent review proves that the resulting change is clean.
 
 ## Delegation
 
