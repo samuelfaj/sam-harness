@@ -27,8 +27,8 @@ func TestVersionPrintsHarnessVersion(t *testing.T) {
 	if stdout.String() != want {
 		t.Fatalf("version = %q, want %q", stdout.String(), want)
 	}
-	if model.HarnessVersion != "0.5.0" {
-		t.Fatalf("HarnessVersion = %q, want 0.5.0 for this release", model.HarnessVersion)
+	if model.HarnessVersion != "0.6.0" {
+		t.Fatalf("HarnessVersion = %q, want 0.6.0 for this release", model.HarnessVersion)
 	}
 }
 

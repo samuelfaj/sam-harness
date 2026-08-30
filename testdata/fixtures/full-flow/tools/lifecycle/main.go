@@ -100,7 +100,7 @@ func review() error {
 	if role == "" || len(strings.TrimSpace(string(prompt))) == 0 {
 		return errors.New("review requires a role and structured prompt")
 	}
-	return json.NewEncoder(os.Stdout).Encode(map[string]any{"findings": []any{}})
+	return json.NewEncoder(os.Stdout).Encode(map[string]any{"review_complete": true, "findings": []any{}})
 }
 
 func repair() error {

@@ -305,7 +305,7 @@ func TestPhaseAllWritesOneReceiptForEveryExecutedLifecyclePhase(t *testing.T) {
 	writeArtifactFixture(t, root)
 	writeExecutable(t, root, "review-clean.sh", `#!/bin/sh
 cat >/dev/null
-printf '{"findings":[]}\n'
+printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P3","summary":"recorded","evidence":"fixture","path":"source.txt","line":1,"required_change":"preserve behavior","acceptance":"behavior remains stable"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
 `)
 	cfg := testPipelineConfig()
 	for index := range cfg.Workflow.Reviewers {
@@ -330,7 +330,7 @@ printf '{"findings":[]}\n'
 	if !receipt.Passed || receipt.Status != StatusPassed || len(receipt.Phases) != len(expected) || receiptPath == "" {
 		t.Fatalf("all receipt = %#v", receipt)
 	}
-	if receipt.ReviewHeadFingerprint == "" {
+	if receipt.ReviewHeadFingerprint == "" || receipt.RepairManifest == nil || receipt.RepairManifestSHA256 == "" || len(receipt.RepairManifest.Actions) != len(model.ReviewerRoles) {
 		t.Fatal("aggregate all receipt lost review lineage evidence")
 	}
 	for index, phase := range expected {
@@ -374,7 +374,7 @@ while [ "$(find "$REVIEW_BARRIER_DIR" -type f | wc -l | tr -d ' ')" -lt 6 ]; do
   [ "$attempt" -lt 200 ] || exit 39
   sleep 0.05
 done
-printf '{"findings":[{"role":"%s","severity":"P2","summary":"recorded","evidence":"%s"}]}\n' "$SAM_HARNESS_REVIEW_ROLE" "$REVIEW_AGENT_TOKEN"
+printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P2","summary":"recorded","evidence":"%s","path":"source.txt","line":1,"required_change":"remove %s from output","acceptance":"%s is absent"}]}\n' "$SAM_HARNESS_REVIEW_ROLE" "$REVIEW_AGENT_TOKEN" "$REVIEW_AGENT_TOKEN" "$REVIEW_AGENT_TOKEN"
 `)
 	if err := copyRepository(root, base, copyForReview); err != nil {
 		t.Fatal(err)
@@ -403,13 +403,47 @@ printf '{"findings":[{"role":"%s","severity":"P2","summary":"recorded","evidence
 	if len(receipt.Commands) != len(model.ReviewerRoles) || len(receipt.Findings) != len(model.ReviewerRoles) {
 		t.Fatalf("review evidence is incomplete: %#v", receipt)
 	}
+	if receipt.RepairManifest == nil || len(receipt.RepairManifest.Actions) != len(model.ReviewerRoles) || receipt.RepairManifestSHA256 == "" {
+		t.Fatalf("review repair manifest is incomplete: %#v", receipt)
+	}
+	if err := validateRepairManifest(receipt); err != nil {
+		t.Fatalf("review repair manifest is invalid: %v", err)
+	}
 	for index, role := range model.ReviewerRoles {
 		if receipt.Findings[index].Role != role || receipt.Commands[index].Name != "review:"+string(role) {
 			t.Fatalf("review evidence order is not deterministic: %#v", receipt)
 		}
-		if receipt.Findings[index].Evidence != "[REDACTED]" || strings.Contains(receipt.Commands[index].Output, "review-allowlisted-secret") {
+		if receipt.RepairManifest.Actions[index] != receipt.Findings[index] {
+			t.Fatalf("repair action %d differs from its finding: %#v", index, receipt.RepairManifest.Actions[index])
+		}
+		if receipt.Findings[index].Evidence != "[REDACTED]" || receipt.Findings[index].RequiredChange != "remove [REDACTED] from output" || receipt.Findings[index].Acceptance != "[REDACTED] is absent" || strings.Contains(receipt.Commands[index].Output, "review-allowlisted-secret") || strings.Contains(fmt.Sprintf("%#v", receipt.RepairManifest), "review-allowlisted-secret") {
 			t.Fatalf("review secret was persisted: finding=%#v command=%#v", receipt.Findings[index], receipt.Commands[index])
 		}
+	}
+}
+
+func TestParseReviewerOutputRequiresCompletePrescriptiveReview(t *testing.T) {
+	t.Parallel()
+	valid := `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"file.go","line":4,"required_change":"validate input before use","acceptance":"the unsafe input is rejected"}]}`
+	findings, err := parseReviewerOutput(valid, model.ReviewerSecurity)
+	if err != nil || len(findings) != 1 || findings[0].RequiredChange == "" || findings[0].Acceptance == "" {
+		t.Fatalf("complete prescriptive review was rejected: findings=%#v err=%v", findings, err)
+	}
+	for name, output := range map[string]string{
+		"incomplete review":  `{"review_complete":false,"findings":[]}`,
+		"missing correction": `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"file.go","line":4,"acceptance":"fixed"}]}`,
+		"missing acceptance": `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"file.go","line":4,"required_change":"fix it"}]}`,
+		"missing path":       `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","line":4,"required_change":"fix it","acceptance":"fixed"}]}`,
+		"missing line":       `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"file.go","required_change":"fix it","acceptance":"fixed"}]}`,
+		"escaping path":      `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"../file.go","line":4,"required_change":"fix it","acceptance":"fixed"}]}`,
+		"padded path":        `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":" file.go ","line":4,"required_change":"fix it","acceptance":"fixed"}]}`,
+		"backslash path":     `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"dir\\file.go","line":4,"required_change":"fix it","acceptance":"fixed"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseReviewerOutput(output, model.ReviewerSecurity); err == nil {
+				t.Fatalf("invalid reviewer output was accepted: %s", output)
+			}
+		})
 	}
 }
 
@@ -418,10 +452,10 @@ func TestLowRiskReviewSkipsRolesAndStillBlocksOnP0(t *testing.T) {
 	writeExecutable(t, root, "review.sh", `#!/bin/sh
 role="$SAM_HARNESS_REVIEW_ROLE"
 if [ "$role" = correctness ]; then
-  printf '{"findings":[{"role":"correctness","severity":"P0","summary":"broken","evidence":"fail","path":"main.go","line":1}]}\n'
+  printf '{"review_complete":true,"findings":[{"role":"correctness","severity":"P0","summary":"broken","evidence":"fail","path":"main.go","line":1,"required_change":"fix main","acceptance":"main passes"}]}\n'
   exit 0
 fi
-printf '{"findings":[]}\n'
+printf '{"review_complete":true,"findings":[]}\n'
 `)
 	cfg := testPipelineConfig()
 	for index := range cfg.Workflow.Reviewers {
@@ -447,6 +481,9 @@ printf '{"findings":[]}\n'
 	if !foundP0 {
 		t.Fatalf("P0 from a running role was dropped: %#v", receipt.Findings)
 	}
+	if receipt.RepairManifest == nil || len(receipt.RepairManifest.Actions) != 1 {
+		t.Fatalf("complete blocked review did not emit its repair manifest: %#v", receipt)
+	}
 }
 
 func TestReviewArbiterBlocksConflictingFindings(t *testing.T) {
@@ -455,13 +492,13 @@ func TestReviewArbiterBlocksConflictingFindings(t *testing.T) {
 role="$SAM_HARNESS_REVIEW_ROLE"
 case "$role" in
   architecture)
-    printf '{"findings":[{"role":"architecture","severity":"P0","summary":"bug","evidence":"a","path":"file.go","line":4}]}\n'
+    printf '{"review_complete":true,"findings":[{"role":"architecture","severity":"P0","summary":"bug","evidence":"a","path":"file.go","line":4,"required_change":"change architecture","acceptance":"architecture passes"}]}\n'
     ;;
   correctness)
-    printf '{"findings":[{"role":"correctness","severity":"P3","summary":"not a bug","evidence":"b","path":"file.go","line":4}]}\n'
+    printf '{"review_complete":true,"findings":[{"role":"correctness","severity":"P3","summary":"not a bug","evidence":"b","path":"file.go","line":4,"required_change":"keep behavior","acceptance":"behavior remains"}]}\n'
     ;;
   *)
-    printf '{"findings":[]}\n'
+    printf '{"review_complete":true,"findings":[]}\n'
     ;;
 esac
 `)
@@ -479,7 +516,7 @@ esac
 func TestReviewArbiterKeepsIdenticalAttribution(t *testing.T) {
 	root := t.TempDir()
 	writeExecutable(t, root, "review.sh", `#!/bin/sh
-printf '{"findings":[{"role":"%s","severity":"P2","summary":"same","evidence":"e","path":"file.go","line":4}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
+printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P2","summary":"same","evidence":"e","path":"file.go","line":4,"required_change":"apply same fix","acceptance":"same issue passes"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
 `)
 	cfg := testPipelineConfig()
 	for index := range cfg.Workflow.Reviewers {
@@ -510,7 +547,7 @@ func TestReviewReceivesCanonicalBaseToHeadChangeEvidence(t *testing.T) {
 payload=$(cat)
 printf '%%s' "$payload" > %q/"$SAM_HARNESS_REVIEW_ROLE.json"
 git diff --quiet HEAD -- && exit 51
-printf '{"findings":[{"role":"%%s","severity":"P3","summary":"change reviewed","evidence":"base-to-head"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
+printf '{"review_complete":true,"findings":[{"role":"%%s","severity":"P3","summary":"change reviewed","evidence":"base-to-head","path":"source.txt","line":1,"required_change":"apply reviewed change","acceptance":"change is accepted"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
 `, promptDirectory))
 	cfg := testPipelineConfig()
 	for index := range cfg.Workflow.Reviewers {
@@ -606,7 +643,7 @@ func TestSecretBearingReviewUsesTrustedConfigArgumentAndRequiresBase(t *testing.
 payload=$(cat)
 test "$REVIEW_TOKEN" = review-secret || exit 61
 test "$(cat "$1")" = trusted || exit 62
-printf '{"findings":[{"role":"%s","severity":"P3","summary":"trusted","evidence":"schema"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
+printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P3","summary":"trusted","evidence":"schema","path":"source.txt","line":1,"required_change":"apply trusted correction","acceptance":"trusted schema passes"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
 `)
 	writeFile(t, trusted, "reviewer-output.schema.json", "trusted\n")
 
@@ -718,7 +755,7 @@ func TestReviewDetectsBaseAndHeadGitIdentityDrift(t *testing.T) {
 			writeExecutable(t, root, "review.sh", fmt.Sprintf(`#!/bin/sh
 cat >/dev/null
 git -C %q -c user.name=review-drift -c user.email=review@localhost commit --allow-empty --no-verify -m drift >/dev/null 2>&1 || true
-printf '{"findings":[{"role":"%%s","severity":"P3","summary":"reviewed","evidence":"identity"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
+printf '{"review_complete":true,"findings":[{"role":"%%s","severity":"P3","summary":"reviewed","evidence":"identity","path":"source.txt","line":1,"required_change":"preserve identity","acceptance":"identity is stable"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
 `, driftRoot))
 			cfg := testPipelineConfig()
 			for index := range cfg.Workflow.Reviewers {
@@ -748,11 +785,11 @@ func TestReviewBlocksP1MalformedOutputAndRepositoryMutation(t *testing.T) {
 	}{
 		{
 			name:       "P1",
-			security:   `printf '{"findings":[{"role":"security","severity":"P1","summary":"blocker","evidence":"fixture"}]}\n'`,
+			security:   `printf '{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"blocker","evidence":"fixture","path":"source.txt","line":1,"required_change":"remove blocker","acceptance":"blocker is absent"}]}\n'`,
 			errorMatch: "review blocked",
 		},
 		{name: "malformed", security: `printf 'not-json\n'`, errorMatch: "review blocked"},
-		{name: "mutation", security: `printf 'mutation\n' > source.txt; printf '{"findings":[]}\n'`, errorMatch: "mutated the repository"},
+		{name: "mutation", security: `printf 'mutation\n' > source.txt; printf '{"review_complete":true,"findings":[]}\n'`, errorMatch: "mutated the repository"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -761,7 +798,7 @@ cat >/dev/null
 if [ "$SAM_HARNESS_REVIEW_ROLE" = security ]; then
   `+scenario.security+`
 else
-  printf '{"findings":[]}\n'
+  printf '{"review_complete":true,"findings":[]}\n'
 fi
 `)
 			cfg := testPipelineConfig()

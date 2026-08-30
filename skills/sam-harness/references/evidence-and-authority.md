@@ -8,7 +8,7 @@ Keep these states separate:
 2. Local checks passed against that source state.
 3. A commit contains the checked source.
 4. The expected remote branch contains that commit.
-5. Pre-merge review findings and approvals refer to the exact provider base/head SHAs, fingerprints, and canonical patch SHA-256.
+5. Pre-merge review findings, the complete hashed repair manifest, and approvals refer to the exact provider base/head SHAs, fingerprints, and canonical patch SHA-256.
 6. Required CI jobs passed for that commit.
 7. An immutable artifact was built from that CI state.
 8. The target environment reports that artifact digest.
@@ -31,7 +31,7 @@ Ordinary GitHub pull-request/merge-group and GitLab MR jobs receive no bound age
 
 GitLab's generated MR YAML omits bound review or repair jobs. Its external trusted project must publish the configured status against the exact current MR head using protected variables/environment and provider-side approvals. Read those controls back; Sam Harness does not supply a complete in-repository GitLab secret-bearing loop. Missing App/external status, protected credentials, released runtime, trusted base configuration, or unchanged current head blocks instead of silently skipping. Mixed bindings leave credential-free review or correction in ordinary CI when the required local evidence exists.
 
-A secret-bearing review receipt is valid only when the job used the trusted released v0.2 runtime, trusted base configuration, and exact `--review-base-sha`/`--review-head-sha` identities. It preserves both provider SHAs and fingerprints plus the canonical patch hash. Missing control-plane input is blocking evidence, not permission to fall back to the proposed change. For the Sam Harness self workflow, establish the release and base configuration before enabling agents.
+A secret-bearing review receipt is valid only when the job used the trusted released matching-version runtime, trusted base configuration, and exact `--review-base-sha`/`--review-head-sha` identities. It preserves both provider SHAs and fingerprints plus the canonical patch hash. Missing control-plane input is blocking evidence, not permission to fall back to the proposed change. For the Sam Harness self workflow, establish the release and base configuration before enabling agents.
 
 Provider-bound agent secrets also require an external command boundary. The canonical configuration must be outside the target repository; `trusted_external_command: true` attests that the reviewer or correction executable resolves outside the target. `trusted_config_arguments` may identify only safe relative helper files by unique, actual zero-based argv positions greater than zero; runtime resolves them from the trusted configuration directory and rejects target-controlled, escaping, symlinked, or unlisted path-like inputs. This attestation does not prove the executable is safe. Local and waiver-only no-secret commands may remain repository-relative.
 
@@ -41,7 +41,7 @@ Provider-bound agent secrets also require an external command boundary. The cano
 
 Stop on missing evidence, scope drift, stale plans, ambiguous destructive targets, or required gate failures. Preserve the real error and the relevant receipt. Prefer reversible operations. A code rollback is not a data rollback; check compatibility and recovery state first.
 
-Receipts are immutable evidence about one execution, not reusable permission. Preserve the repository fingerprint, timestamps, command argv, findings, review base/head fingerprints and patch hash, artifact/SBOM/provenance hashes, source fingerprint, repair patch hash when applicable, and exact final status. A blocked receipt never proves a later phase.
+Receipts are immutable evidence about one execution, not reusable permission. Preserve the repository fingerprint, timestamps, command argv, findings, complete repair manifest and its hash, review base/head fingerprints and patch hash, artifact/SBOM/provenance hashes, source fingerprint, repair patch hash when applicable, and exact final status. A blocked receipt never proves a later phase. A manifest prescribes one bounded correction; only a fresh independent review proves that the resulting change is clean.
 
 ## Delegation
 

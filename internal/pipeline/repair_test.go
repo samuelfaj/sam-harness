@@ -107,6 +107,179 @@ printf 'test\n' >> "$1"
 	}
 }
 
+func TestReviewRepairRequiresIntactManifestAndIncludesEveryActionInPrompt(t *testing.T) {
+	root := t.TempDir()
+	cfg := testPipelineConfig()
+	writePipelineConfig(t, root, cfg)
+	testReceiptPath := writeFailedReceipt(t, root)
+	var failed Receipt
+	if err := json.Unmarshal([]byte(readFile(t, testReceiptPath)), &failed); err != nil {
+		t.Fatal(err)
+	}
+	failed.Phase = model.PhaseReview
+	failed.Error = "review blocked by P1 findings"
+	failed.ReviewBaseSHA = strings.Repeat("a", 40)
+	failed.ReviewBaseFingerprint = strings.Repeat("d", sha256.Size*2)
+	failed.ReviewHeadSHA = strings.Repeat("b", 40)
+	failed.ReviewHeadFingerprint = failed.Fingerprint
+	failed.ReviewPatchSHA256 = strings.Repeat("c", sha256.Size*2)
+	failed.Findings = []Finding{
+		{Role: model.ReviewerSecurity, Severity: "P1", Summary: "unsafe input", Evidence: "input.go:4", Path: "input.go", Line: 4, RequiredChange: "validate input", Acceptance: "invalid input is rejected"},
+		{Role: model.ReviewerSimplicity, Severity: "P2", Summary: "duplicate branch", Evidence: "input.go:8", Path: "input.go", Line: 8, RequiredChange: "remove the duplicate branch", Acceptance: "one branch remains"},
+	}
+	if err := attachRepairManifest(&failed); err != nil {
+		t.Fatal(err)
+	}
+	reviewReceiptPath := filepath.Join(root, cfg.Evidence.ReceiptDirectory, receiptFilename(failed))
+	writeReceiptAt(t, reviewReceiptPath, failed)
+	rawConfig, err := os.ReadFile(filepath.Join(root, ".sam-harness", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configDigest := sha256.Sum256(rawConfig)
+	_, loaded, err := loadFailedReceipt(root, cfg, reviewReceiptPath, failed.Fingerprint, hex.EncodeToString(configDigest[:]))
+	if err != nil {
+		t.Fatalf("intact review manifest was rejected: %v", err)
+	}
+	prompt, err := correctionPrompt(root, failed.Fingerprint, model.CorrectionConfig{MaxAttempts: 1, MaxChangedFiles: 2, MaxChangedLines: 4}, 1, loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Instruction      string          `json:"instruction"`
+		TopLevelManifest *RepairManifest `json:"repair_manifest"`
+		FailedReceipt    Receipt         `json:"failed_receipt"`
+	}
+	if err := json.Unmarshal(prompt, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.TopLevelManifest != nil || decoded.FailedReceipt.RepairManifest == nil || len(decoded.FailedReceipt.RepairManifest.Actions) != 2 || !strings.Contains(decoded.Instruction, "every verified action") {
+		t.Fatalf("correction prompt omitted consolidated actions: %s", prompt)
+	}
+
+	tampered := failed
+	tampered.RepairManifest = nil
+	writeReceiptAt(t, reviewReceiptPath, tampered)
+	if _, _, err := loadFailedReceipt(root, cfg, reviewReceiptPath, failed.Fingerprint, hex.EncodeToString(configDigest[:])); err == nil || !strings.Contains(err.Error(), "no complete repair manifest") {
+		t.Fatalf("review receipt without manifest was accepted: %v", err)
+	}
+	tampered = failed
+	manifestCopy := *failed.RepairManifest
+	manifestCopy.Actions = append([]Finding(nil), failed.RepairManifest.Actions...)
+	manifestCopy.Actions[0].Acceptance = "different acceptance"
+	tampered.RepairManifest = &manifestCopy
+	writeReceiptAt(t, reviewReceiptPath, tampered)
+	if _, _, err := loadFailedReceipt(root, cfg, reviewReceiptPath, failed.Fingerprint, hex.EncodeToString(configDigest[:])); err == nil || !strings.Contains(err.Error(), "actions do not match findings") {
+		t.Fatalf("tampered review manifest was accepted: %v", err)
+	}
+
+	for _, test := range []struct {
+		name       string
+		mutate     func(*Receipt)
+		errorMatch string
+	}{
+		{name: "digest", mutate: func(receipt *Receipt) { receipt.RepairManifestSHA256 = strings.Repeat("0", sha256.Size*2) }, errorMatch: "digest does not match"},
+		{name: "base fingerprint", mutate: func(receipt *Receipt) { receipt.RepairManifest.ReviewBaseFingerprint = "different" }, errorMatch: "lineage does not match"},
+		{name: "empty actions", mutate: func(receipt *Receipt) { receipt.RepairManifest.Actions = nil }, errorMatch: "actions do not match findings"},
+		{name: "invalid action", mutate: func(receipt *Receipt) { receipt.RepairManifest.Actions[0].Path = "../escape" }, errorMatch: "invalid"},
+		{name: "no blocker", mutate: func(receipt *Receipt) {
+			for index := range receipt.Findings {
+				receipt.Findings[index].Severity = "P2"
+				receipt.RepairManifest.Actions[index].Severity = "P2"
+			}
+			digest, digestErr := repairManifestDigest(*receipt.RepairManifest)
+			if digestErr != nil {
+				t.Fatal(digestErr)
+			}
+			receipt.RepairManifestSHA256 = digest
+		}, errorMatch: "no blocking finding"},
+		{name: "arbiter conflict", mutate: func(receipt *Receipt) { receipt.ArbiterBlocked = true }, errorMatch: "conflicting review findings"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			raw, err := json.Marshal(failed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var candidate Receipt
+			if err := json.Unmarshal(raw, &candidate); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&candidate)
+			writeReceiptAt(t, reviewReceiptPath, candidate)
+			if _, _, err := loadFailedReceipt(root, cfg, reviewReceiptPath, failed.Fingerprint, hex.EncodeToString(configDigest[:])); err == nil || !strings.Contains(err.Error(), test.errorMatch) {
+				t.Fatalf("tampered review receipt was accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestReviewRepairAppliesEveryManifestActionInOneAttempt(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "first.txt", "broken first\n")
+	writeFile(t, root, "second.txt", "broken second\n")
+	writeExecutable(t, root, "repair.sh", `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'fix first file'*'fix second file'*) ;;
+  *) exit 41 ;;
+esac
+printf 'fixed first\n' > first.txt
+printf 'fixed second\n' > second.txt
+`)
+	writeExecutable(t, root, "static.sh", `#!/bin/sh
+grep -q '^fixed first$' first.txt
+grep -q '^fixed second$' second.txt
+`)
+	writeExecutable(t, root, "test.sh", `#!/bin/sh
+grep -q '^fixed first$' first.txt
+grep -q '^fixed second$' second.txt
+`)
+	cfg := testPipelineConfig()
+	cfg.Workflow.Correction = model.CorrectionConfig{
+		Enabled: true, FilesystemSandboxed: true, Command: []string{"./repair.sh"},
+		MaxAttempts: 1, MaxChangedFiles: 2, MaxChangedLines: 4, BranchPrefix: "sam-repair/",
+	}
+	cfg.Gates = []model.Gate{
+		{Name: "static", Stage: "local", Phase: model.PhaseStatic, Workdir: ".", Command: []string{"./static.sh"}, Required: true},
+		{Name: "test", Stage: "local", Phase: model.PhaseTest, Workdir: ".", Command: []string{"./test.sh"}, Required: true},
+	}
+	writePipelineConfig(t, root, cfg)
+	failedPath := writeFailedReceipt(t, root)
+	var failed Receipt
+	if err := json.Unmarshal([]byte(readFile(t, failedPath)), &failed); err != nil {
+		t.Fatal(err)
+	}
+	failed.Phase = model.PhaseReview
+	failed.Status = StatusBlocked
+	failed.Error = "review blocked by complete findings"
+	failed.ReviewBaseSHA = strings.Repeat("a", 40)
+	failed.ReviewBaseFingerprint = strings.Repeat("b", sha256.Size*2)
+	failed.ReviewHeadSHA = strings.Repeat("c", 40)
+	failed.ReviewHeadFingerprint = failed.Fingerprint
+	failed.ReviewPatchSHA256 = strings.Repeat("d", sha256.Size*2)
+	failed.Findings = []Finding{
+		{Role: model.ReviewerCorrectness, Severity: "P1", Summary: "first is broken", Evidence: "first.txt:1", Path: "first.txt", Line: 1, RequiredChange: "fix first file", Acceptance: "first file is fixed"},
+		{Role: model.ReviewerBusinessRules, Severity: "P2", Summary: "second is broken", Evidence: "second.txt:1", Path: "second.txt", Line: 1, RequiredChange: "fix second file", Acceptance: "second file is fixed"},
+	}
+	if err := attachRepairManifest(&failed); err != nil {
+		t.Fatal(err)
+	}
+	reviewReceiptPath := filepath.Join(root, cfg.Evidence.ReceiptDirectory, receiptFilename(failed))
+	writeReceiptAt(t, reviewReceiptPath, failed)
+
+	receipt, _, err := RepairWithConfig(root, "", reviewReceiptPath, false)
+	if err != nil {
+		t.Fatalf("multi-action review repair failed: %v\n%#v", err, receipt)
+	}
+	if len(receipt.Attempts) != 1 || readFile(t, filepath.Join(root, "first.txt")) != "fixed first\n" || readFile(t, filepath.Join(root, "second.txt")) != "fixed second\n" {
+		t.Fatalf("review repair did not apply every action in one attempt: %#v", receipt)
+	}
+	patch := readFile(t, receipt.RepairPatch)
+	if !strings.Contains(patch, "first.txt") || !strings.Contains(patch, "second.txt") {
+		t.Fatalf("review repair patch omitted an action: %s", patch)
+	}
+}
+
 func TestRepairTrustedConfigOverrideGovernsPRWorktree(t *testing.T) {
 	root := t.TempDir()
 	exfilMarker := filepath.Join(t.TempDir(), "pr-repair-ran")

@@ -1,17 +1,47 @@
 package render
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	harnessconfig "github.com/samuelfaj/sam-harness/internal/config"
 	"github.com/samuelfaj/sam-harness/internal/model"
 	"github.com/samuelfaj/sam-harness/internal/pipeline"
+	harnessschema "github.com/samuelfaj/sam-harness/schema"
 	"gopkg.in/yaml.v3"
 )
+
+func TestBuildGeneratesExhaustiveReviewerOutputSchema(t *testing.T) {
+	t.Parallel()
+	operations, err := Build(model.ScanResult{Root: t.TempDir()}, model.ProfileBaseline, answers())
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := operationContent(t, operations, ".sam-harness/reviewer-output.schema.json")
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(content), &schema); err != nil {
+		t.Fatalf("reviewer output schema is not JSON: %v", err)
+	}
+	if content != string(harnessschema.ReviewerOutputJSON) {
+		t.Fatalf("generated reviewer schema differs from canonical schema:\n%s", content)
+	}
+	checkedIn, err := os.ReadFile(filepath.Join("..", "..", ".sam-harness", "reviewer-output.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checkedInSchema map[string]any
+	if err := json.Unmarshal(checkedIn, &checkedInSchema); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(schema, checkedInSchema) {
+		t.Fatal("checked-in reviewer schema differs structurally from canonical schema")
+	}
+}
 
 func TestBuildPreservesExistingInstructions(t *testing.T) {
 	t.Parallel()
@@ -644,12 +674,44 @@ func TestBuildSeparatesRepairSecretsFromUntrustedPhaseJobs(t *testing.T) {
 	if strings.Contains(reviewRepair, "merge_group") {
 		t.Fatalf("merge-group failure can trigger automatic repair:\n%s", reviewRepair)
 	}
+	if !strings.Contains(reviewRepair, `test "$(jq -r '.status' "$receipt")" = blocked`) || strings.Contains(reviewRepair, `test "$(jq -r '.status' "$receipt")" = failed`) {
+		t.Fatalf("review repair does not accept the blocked review status:\n%s", reviewRepair)
+	}
+	if !strings.Contains(reviewRepair, "!startsWith(needs.resolve.outputs.head_ref, 'sam-harness/repair-')") {
+		t.Fatalf("trusted review repair can recursively repair its own branch:\n%s", reviewRepair)
+	}
+	resolve := contentSection(t, agents, "  resolve:\n", "  start_review_check:\n")
+	for _, expected := range []string{`head_ref="$(printf '%s' "$pull" | jq -r '.head.ref')"`, `head_ref=%s\n' "$head_sha" "$base_sha" "$pr_number" "$SOURCE_RUN_ID" "$head_ref"`} {
+		if !strings.Contains(resolve, expected) {
+			t.Fatalf("trusted resolver does not publish the provider-owned pull-request branch %q:\n%s", expected, resolve)
+		}
+	}
 
 	gitlab := operationContent(t, operations, ".sam-harness/ci/gitlab.yml")
 	for _, forbidden := range []string{"REPAIR_ENV", "REPAIR_API_KEY", "sam-harness-repair-static:", "sam-harness-publish-repair:"} {
 		if strings.Contains(gitlab, forbidden) {
 			t.Fatalf("GitLab MR YAML contains secret-bound repair control %q:\n%s", forbidden, gitlab)
 		}
+	}
+}
+
+func TestBuildLimitsCredentialFreeReviewRepairToOnePass(t *testing.T) {
+	t.Parallel()
+	approved := productionAnswers()
+	approved.CISecretBindings = nil
+	approved.CISecretWaivers = map[string]string{"github": "agents need no provider secret", "gitlab": "agents need no provider secret"}
+	operations := buildProductionOperationsWithAnswers(t, t.TempDir(), approved)
+
+	github := operationContent(t, operations, ".github/workflows/sam-harness.yml")
+	repair := contentSection(t, github, "  repair_review:\n", "  repair_artifact:\n")
+	if !strings.Contains(repair, "!startsWith(github.head_ref || github.ref_name, 'sam-harness/repair-')") {
+		t.Fatalf("credential-free GitHub review repair can recurse:\n%s", repair)
+	}
+
+	gitlab := operationContent(t, operations, ".sam-harness/ci/gitlab.yml")
+	repair = contentSection(t, gitlab, "sam-harness-repair-review:\n", "sam-harness-repair-artifact:\n")
+	if !strings.Contains(repair, "automatic review repair is limited to one pass") || !strings.Contains(repair, "'sam-harness/repair-'*") {
+		t.Fatalf("credential-free GitLab review repair can recurse:\n%s", repair)
 	}
 }
 
