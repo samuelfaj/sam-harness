@@ -83,8 +83,8 @@ func validateFinding(finding Finding) error {
 	if strings.TrimSpace(finding.Summary) == "" || strings.TrimSpace(finding.Evidence) == "" || strings.TrimSpace(finding.RequiredChange) == "" || strings.TrimSpace(finding.Acceptance) == "" {
 		return errors.New("required text is empty")
 	}
-	path := filepath.ToSlash(strings.TrimSpace(finding.Path))
-	if path == "" || filepath.IsAbs(path) || path == "." || path == ".." || strings.HasPrefix(path, "../") || filepath.ToSlash(filepath.Clean(filepath.FromSlash(path))) != path {
+	path := filepath.ToSlash(finding.Path)
+	if path == "" || path != strings.TrimSpace(path) || filepath.IsAbs(path) || path == "." || path == ".." || strings.HasPrefix(path, "../") || filepath.ToSlash(filepath.Clean(filepath.FromSlash(path))) != path {
 		return errors.New("path must be a clean repository-relative path")
 	}
 	if finding.Line < 0 {
