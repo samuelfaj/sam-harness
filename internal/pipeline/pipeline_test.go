@@ -437,6 +437,7 @@ func TestParseReviewerOutputRequiresCompletePrescriptiveReview(t *testing.T) {
 		"missing line":       `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"file.go","required_change":"fix it","acceptance":"fixed"}]}`,
 		"escaping path":      `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"../file.go","line":4,"required_change":"fix it","acceptance":"fixed"}]}`,
 		"padded path":        `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":" file.go ","line":4,"required_change":"fix it","acceptance":"fixed"}]}`,
+		"backslash path":     `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"dir\\file.go","line":4,"required_change":"fix it","acceptance":"fixed"}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := parseReviewerOutput(output, model.ReviewerSecurity); err == nil {

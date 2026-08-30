@@ -84,7 +84,7 @@ func validateFinding(finding Finding) error {
 		return errors.New("required text is empty")
 	}
 	path := filepath.ToSlash(finding.Path)
-	if path == "" || path != strings.TrimSpace(path) || filepath.IsAbs(path) || path == "." || path == ".." || strings.HasPrefix(path, "../") || filepath.ToSlash(filepath.Clean(filepath.FromSlash(path))) != path {
+	if path == "" || path != finding.Path || path != strings.TrimSpace(path) || strings.Contains(path, `\`) || filepath.IsAbs(path) || path == "." || path == ".." || strings.HasPrefix(path, "../") || filepath.ToSlash(filepath.Clean(filepath.FromSlash(path))) != path {
 		return errors.New("path must be a clean repository-relative path")
 	}
 	if finding.Line < 0 {
