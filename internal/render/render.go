@@ -806,7 +806,7 @@ func workflowDocument(cfg model.Config) string {
 	builder.WriteString("Trusted review uses the pinned released harness, trusted base configuration, explicit `--review-base`, `--review-base-sha`, and `--review-head-sha`; its receipt binds the exact provider SHAs, fingerprints, patch, and SHA-256. Missing trusted control-plane inputs or credentials fails closed.\n\n")
 	for _, provider := range cfg.CI.Providers {
 		bindings := cfg.CI.SecretBindings[provider]
-		if len(bindings) == 0 {
+		if len(bindings) == 0 && !providerUsesExternalAgentControl(cfg, provider) {
 			continue
 		}
 		control := cfg.CI.AgentControlPlanes[provider]
@@ -814,7 +814,7 @@ func workflowDocument(cfg model.Config) string {
 		case "github":
 			builder.WriteString(fmt.Sprintf("GitHub keeps `.github/workflows/sam-harness.yml` credential-free for pull requests and direct `merge_group` events. The base-owned `.github/workflows/sam-harness-agents.yml` uses `pull_request_target` for pull requests, `repository_dispatch` type `sam_harness_merge_group_review` for merge-queue review, and failed-run `workflow_run` for bound repair. It never listens directly to `merge_group`, because that workflow definition would come from the synthetic queue ref. A dedicated external App/webhook control plane must observe each provider `merge_group` checks request and send the exact current `head_sha`, current default-branch `base_sha`, and `merge_group_ref` in `client_payload`; the generated resolver re-fetches both provider refs before any review and again before check conclusion. Absence or drift leaves required check `%s` missing or failed and blocks the queue. The workflow checks out exact base/head SHAs as data, never runs target setup, caches, hooks, local actions, or repository commands, and scopes model secrets to the review or repair step. Configure `%s` as a protected agent environment restricted to default/protected branches with required reviewers and prevent-self-review, then read those settings back. Store both GitHub App credentials `%s` and `%s` in that protected environment, never as repository-level secrets; every job that reads either credential declares the environment. The in-workflow App tokens request only the permissions needed by each job. The external dispatcher needs repository-dispatch authority, and the trusted repair publisher needs contents:write and pull_requests:write only when enabled. Require the App check on the exact pull-request and merge-group head. Cancellation leaves it pending, and automatic repair is never published for a merge-group run. Initial adoption without the released harness/base config, external merge-queue dispatcher, or protected credentials fails closed.\n\nMerge-queue dispatcher payload:\n\n```json\n{\n  \"event_type\": \"sam_harness_merge_group_review\",\n  \"client_payload\": {\n    \"head_sha\": \"<provider merge-group SHA>\",\n    \"base_sha\": \"<current default-branch SHA>\",\n    \"merge_group_ref\": \"refs/heads/gh-readonly-queue/<provider ref>\"\n  }\n}\n```\n\n", control.RequiredCheck, cfg.CI.AgentSecretEnvironments[provider], control.AppIDSecret, control.AppPrivateKeySecret))
 		case "gitlab":
-			builder.WriteString(fmt.Sprintf("GitLab merge-request YAML never receives configured review or repair secrets and emits no secret-bound review or repair job. Project `%s` is the required external trusted control plane and must publish status `%s` for the exact current MR head after six-role review. Configure that external status check, protected variables, and protected environment entirely provider-side and read them back; absence blocks merge rather than becoming a skipped local job. The generated credential-free static, test, and artifact gates remain in the MR pipeline.\n\n", control.ExternalProject, control.RequiredCheck))
+			builder.WriteString(fmt.Sprintf("GitLab merge-request YAML never receives configured review or repair secrets and emits no agent review, repair, or repair-publisher job when the control-plane mode is external. Project `%s` is the required external trusted control plane and owns agent review and enabled correction. It must publish status `%s` for the exact current MR head after six-role review. Configure that external status check, protected variables, protected environment, bounded correction, and publisher entirely provider-side and read them back; absence blocks merge rather than becoming a skipped local job. The generated credential-free static, test, and artifact gates remain in the MR pipeline.\n\n", control.ExternalProject, control.RequiredCheck))
 		}
 	}
 	return builder.String()
@@ -1205,6 +1205,11 @@ jobs:
 
 func providerHasAgentBindings(cfg model.Config, provider string) bool {
 	return len(scopedSecretBindings(cfg, provider, model.CISecretScopeReview)) > 0 || len(scopedSecretBindings(cfg, provider, model.CISecretScopeRepair)) > 0
+}
+
+func providerUsesExternalAgentControl(cfg model.Config, provider string) bool {
+	control, ok := cfg.CI.AgentControlPlanes[provider]
+	return ok && control.Mode == model.AgentControlPlaneModeExternal
 }
 
 func githubAgentsWorkflow(cfg model.Config) string {
@@ -2091,8 +2096,9 @@ func gitlabJob(cfg model.Config) string {
 		return builder.String()
 	}
 	artifactDependency := "sam-harness-test"
-	gitLabReviewBound := len(scopedSecretBindings(cfg, "gitlab", model.CISecretScopeReview)) > 0
-	gitLabRepairBound := len(scopedSecretBindings(cfg, "gitlab", model.CISecretScopeRepair)) > 0
+	gitLabExternalControl := providerUsesExternalAgentControl(cfg, "gitlab")
+	gitLabReviewBound := gitLabExternalControl || len(scopedSecretBindings(cfg, "gitlab", model.CISecretScopeReview)) > 0
+	gitLabRepairBound := gitLabExternalControl || len(scopedSecretBindings(cfg, "gitlab", model.CISecretScopeRepair)) > 0
 	if !gitLabReviewBound {
 		writeGitLabReviewJob(&builder, cfg, imageName)
 		artifactDependency = "sam-harness-review"

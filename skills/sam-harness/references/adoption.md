@@ -99,7 +99,7 @@ For GitHub, create a dedicated App, keep its ID/private key and the named model 
 
 For GitLab, configure the named external project as the trusted secret-bearing control plane, protect its variables/environment, and require its configured status on the exact current MR head. Read those settings plus protected branches and MR approvals back from GitLab. The generated MR YAML stays credential-free and omits the corresponding bound review or repair job; it does not implement a complete secret-bearing loop inside the repository.
 
-Do not run or claim a secret-bearing review or repair until provider readback succeeds. A fork, missing protected secret, absent App/external status, missing released matching-version harness, missing trusted base configuration, or changed head blocks. Never convert the absence into a skipped gate. Mixed bindings move only the bound scope: a credential-free review or correction remains in the ordinary CI flow when its evidence is locally available.
+Do not run or claim a secret-bearing review or repair until provider readback succeeds. A fork, missing protected secret, absent App/external status, missing released matching-version harness, missing trusted base configuration, or changed head blocks. Never convert the absence into a skipped gate. GitHub mixed bindings move only the bound scope. GitLab `mode: external` delegates all agent review, correction, and publishing to the external project regardless of bindings.
 
 Generated secret-bearing jobs use a trusted released matching-version CLI and pass `--config` for a separate trusted base configuration outside the target repository. Review also passes `--review-base`, `--review-base-sha`, and `--review-head-sha`, binding the receipt to the provider SHAs, both fingerprints, and a canonical patch hash. The configured executable must resolve outside the target, and any explicitly indexed helper resolves from the trusted configuration directory. This creates an intentional bootstrap boundary for the Sam Harness repository itself: publish or otherwise approve that matching version and land the base configuration through a trusted path before enabling agent credentials. Do not use the proposed CLI, configuration, executable, or helper script to bootstrap its own secret access.
 
@@ -110,7 +110,7 @@ Generated secret-bearing jobs use a trusted released matching-version CLI and pa
 A legacy production or regulated configuration does not contain the required current-version workflow, CI secret decision, protected agent-environment/control-plane mappings, filesystem attestations, or trusted-external-command decisions. Collect the complete [workflow configuration](workflow-configuration.md), including provider bindings or explicit waivers, protected agent environments, control planes, verified reviewer/correction attestations, and any trusted config argv positions, in a temporary answers file outside the repository, then run:
 
 ```text
-sam-harness upgrade <root> --to 0.6.0 --answers <answers-file>
+sam-harness upgrade <root> --to 0.6.1 --answers <answers-file>
 ```
 
 Show unresolved decisions, every file operation, and the new plan ID. Apply only after the user approves that exact ID. If the repository fingerprint changes or the plan expires, discard it and create another upgrade plan.
