@@ -180,6 +180,22 @@ func TestRunAcceptsMixedReviewAndRepairSecretBoundaries(t *testing.T) {
 	}
 }
 
+func TestRunAcceptsManualExternalGitLabAgentControl(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	delete(answers.CISecretBindings, "gitlab")
+	delete(answers.AgentSecretEnvironments, "gitlab")
+	answers.CISecretWaivers = map[string]string{"gitlab": "the external shell runner uses a pre-authenticated manual session"}
+	root := installProductionHarnessWithAnswers(t, answers)
+	report, err := Run(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Passed {
+		t.Fatalf("doctor rejected manual external GitLab control: %v", report.Errors)
+	}
+}
+
 func TestRunRequiresFailClosedSecretFreePullRequestPhaseJobs(t *testing.T) {
 	t.Parallel()
 	answers := productionAnswers()

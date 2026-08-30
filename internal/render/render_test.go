@@ -563,6 +563,34 @@ func TestBuildScopesProviderSecretsToExactPhaseAndRepairSteps(t *testing.T) {
 	}
 }
 
+func TestBuildKeepsManualExternalGitLabAgentWorkOutOfMergeRequestYAML(t *testing.T) {
+	t.Parallel()
+	answers := productionAnswers()
+	delete(answers.CISecretBindings, "gitlab")
+	answers.CISecretWaivers = map[string]string{"gitlab": "the external shell runner uses a pre-authenticated manual session"}
+
+	operations := buildProductionOperationsWithAnswers(t, t.TempDir(), answers)
+	gitlab := operationContent(t, operations, ".sam-harness/ci/gitlab.yml")
+	for _, forbidden := range []string{
+		"sam-harness-review:\n",
+		"sam-harness-repair-static:\n",
+		"sam-harness-repair-test:\n",
+		"sam-harness-repair-review:\n",
+		"sam-harness-repair-artifact:\n",
+		"sam-harness-publish-repair:\n",
+	} {
+		if strings.Contains(gitlab, forbidden) {
+			t.Fatalf("external GitLab control leaked local agent job %q:\n%s", forbidden, gitlab)
+		}
+	}
+	workflow := operationContent(t, operations, ".sam-harness/WORKFLOW.md")
+	for _, expected := range []string{"trusted/review-control", "sam-harness/review", "owns agent review and enabled correction", "absence blocks merge"} {
+		if !strings.Contains(workflow, expected) {
+			t.Fatalf("external manual GitLab contract omitted %q:\n%s", expected, workflow)
+		}
+	}
+}
+
 func TestBuildPreMergeReviewUsesProtectedTrustedControlPlane(t *testing.T) {
 	t.Parallel()
 	operations := buildProductionOperations(t, t.TempDir())
@@ -709,9 +737,14 @@ func TestBuildLimitsCredentialFreeReviewRepairToOnePass(t *testing.T) {
 	}
 
 	gitlab := operationContent(t, operations, ".sam-harness/ci/gitlab.yml")
-	repair = contentSection(t, gitlab, "sam-harness-repair-review:\n", "sam-harness-repair-artifact:\n")
-	if !strings.Contains(repair, "automatic review repair is limited to one pass") || !strings.Contains(repair, "'sam-harness/repair-'*") {
-		t.Fatalf("credential-free GitLab review repair can recurse:\n%s", repair)
+	for _, forbidden := range []string{"sam-harness-review:\n", "sam-harness-repair-review:\n", "sam-harness-publish-repair:\n"} {
+		if strings.Contains(gitlab, forbidden) {
+			t.Fatalf("external GitLab control leaked local agent job %q:\n%s", forbidden, gitlab)
+		}
+	}
+	budget := operationContent(t, operations, ".sam-harness/CHANGE_BUDGET.md")
+	if !strings.Contains(budget, "Automatic review repair is limited to one pass") {
+		t.Fatalf("external GitLab correction contract omitted the one-pass limit:\n%s", budget)
 	}
 }
 
@@ -745,14 +778,9 @@ func TestBuildMixedAgentBindingsPreserveCorrectionWithoutDanglingJobs(t *testing
 		}
 
 		gitlab := operationContent(t, operations, ".sam-harness/ci/gitlab.yml")
-		for _, expected := range []string{"sam-harness-repair-static:\n", "sam-harness-repair-test:\n", "sam-harness-repair-artifact:\n", "sam-harness-publish-repair:\n"} {
-			if !strings.Contains(gitlab, expected) {
-				t.Fatalf("credential-free GitLab correction lost %q:\n%s", expected, gitlab)
-			}
-		}
-		for _, forbidden := range []string{"sam-harness-review:\n", "sam-harness-repair-review:\n", "job: sam-harness-repair-review", "OPENAI_API_KEY", "REPAIR_API_KEY"} {
+		for _, forbidden := range []string{"sam-harness-review:\n", "sam-harness-repair-static:\n", "sam-harness-repair-test:\n", "sam-harness-repair-review:\n", "sam-harness-repair-artifact:\n", "sam-harness-publish-repair:\n", "OPENAI_API_KEY", "REPAIR_API_KEY"} {
 			if strings.Contains(gitlab, forbidden) {
-				t.Fatalf("GitLab external-review pipeline contains dangling or secret-bound control %q:\n%s", forbidden, gitlab)
+				t.Fatalf("GitLab external control pipeline contains local agent control %q:\n%s", forbidden, gitlab)
 			}
 		}
 	})
@@ -781,12 +809,9 @@ func TestBuildMixedAgentBindingsPreserveCorrectionWithoutDanglingJobs(t *testing
 		}
 
 		gitlab := operationContent(t, operations, ".sam-harness/ci/gitlab.yml")
-		if !strings.Contains(gitlab, "sam-harness-review:\n") {
-			t.Fatalf("GitLab repair-bound pipeline lost credential-free review:\n%s", gitlab)
-		}
-		for _, forbidden := range []string{"sam-harness-repair-static:\n", "sam-harness-repair-review:\n", "sam-harness-publish-repair:\n", "REPAIR_API_KEY"} {
+		for _, forbidden := range []string{"sam-harness-review:\n", "sam-harness-repair-static:\n", "sam-harness-repair-test:\n", "sam-harness-repair-review:\n", "sam-harness-repair-artifact:\n", "sam-harness-publish-repair:\n", "REPAIR_API_KEY"} {
 			if strings.Contains(gitlab, forbidden) {
-				t.Fatalf("GitLab MR pipeline contains secret-bound repair control %q:\n%s", forbidden, gitlab)
+				t.Fatalf("GitLab MR pipeline contains external agent control %q:\n%s", forbidden, gitlab)
 			}
 		}
 	})
