@@ -2208,44 +2208,48 @@ func gitlabJob(cfg model.Config) string {
     exclude:
       - .sam-harness/evidence/trusted-control/**/*
 `)
-	writeGitLabPhaseJob(&builder, cfg, "sam-harness-static", model.PhaseStatic, "static", "", false)
-	writeGitLabPhaseJob(&builder, cfg, "sam-harness-test", model.PhaseTest, "test", "sam-harness-static", false)
+	writeGitLabPhaseJob(&builder, cfg, "sam-harness-static", model.PhaseStatic, "static", []string{}, false)
+	writeGitLabPhaseJob(&builder, cfg, "sam-harness-test", model.PhaseTest, "test", []string{}, false)
 	if cfg.Workflow == nil || !cfg.Workflow.Enabled {
 		return builder.String()
 	}
-	artifactDependency := "sam-harness-test"
+	artifactDependencies := []string{"sam-harness-static", "sam-harness-test"}
 	gitLabExternalControl := providerUsesExternalAgentControl(cfg, "gitlab")
 	gitLabReviewBound := gitLabExternalControl || len(scopedSecretBindings(cfg, "gitlab", model.CISecretScopeReview)) > 0
 	gitLabRepairBound := gitLabExternalControl || len(scopedSecretBindings(cfg, "gitlab", model.CISecretScopeRepair)) > 0
 	if !gitLabReviewBound {
 		writeGitLabReviewJob(&builder, cfg, imageName)
-		artifactDependency = "sam-harness-review"
+		artifactDependencies = append(artifactDependencies, "sam-harness-review")
 	}
-	writeGitLabPhaseJob(&builder, cfg, "sam-harness-artifact", model.PhaseArtifact, "artifact", artifactDependency, false)
+	writeGitLabPhaseJob(&builder, cfg, "sam-harness-artifact", model.PhaseArtifact, "artifact", artifactDependencies, false)
 	if repairEnabled(cfg) && !gitLabRepairBound {
 		writeGitLabRepairJobs(&builder, cfg, imageName, !gitLabReviewBound)
 	}
 	if repairChangeRequestEnabled(cfg) && !gitLabRepairBound {
 		writeGitLabRepairPublisherJob(&builder, cfg, !gitLabReviewBound)
 	}
-	writeGitLabPhaseJob(&builder, cfg, "sam-harness-staging", model.PhaseStaging, "staging", "sam-harness-artifact", true)
+	writeGitLabPhaseJob(&builder, cfg, "sam-harness-staging", model.PhaseStaging, "staging", []string{"sam-harness-artifact"}, true)
 	productionDependency := "sam-harness-staging"
 	if cfg.Workflow != nil && len(cfg.Workflow.Migration) > 0 {
-		writeGitLabPhaseJob(&builder, cfg, "sam-harness-migration", model.PhaseMigration, "staging", "sam-harness-staging", true)
+		writeGitLabPhaseJob(&builder, cfg, "sam-harness-migration", model.PhaseMigration, "staging", []string{"sam-harness-staging", "sam-harness-artifact"}, true)
 		productionDependency = "sam-harness-migration"
 	}
 	writeGitLabProductionJob(&builder, cfg, productionDependency)
-	writeGitLabPhaseJob(&builder, cfg, "sam-harness-observe", model.PhaseObserve, "observe", "sam-harness-production", true)
+	writeGitLabPhaseJob(&builder, cfg, "sam-harness-observe", model.PhaseObserve, "observe", []string{"sam-harness-production", "sam-harness-artifact"}, true)
 	writeGitLabRollbackJob(&builder, cfg)
 	return builder.String()
 }
 
-func writeGitLabPhaseJob(builder *strings.Builder, cfg model.Config, job string, phase model.Phase, stage, needs string, defaultBranchOnly bool) {
+func writeGitLabPhaseJob(builder *strings.Builder, cfg model.Config, job string, phase model.Phase, stage string, needs []string, defaultBranchOnly bool) {
 	builder.WriteString("\n" + job + ":\n  extends: .sam-harness-base\n  stage: " + stage + "\n")
-	if needs != "" {
-		builder.WriteString("  needs:\n    - job: " + needs + "\n      artifacts: true\n")
-		if (phase == model.PhaseMigration || phase == model.PhaseObserve) && needs != "sam-harness-artifact" {
-			builder.WriteString("    - job: sam-harness-artifact\n      artifacts: true\n")
+	if needs != nil {
+		if len(needs) == 0 {
+			builder.WriteString("  needs: []\n")
+		} else {
+			builder.WriteString("  needs:\n")
+			for _, need := range needs {
+				builder.WriteString("    - job: " + need + "\n      artifacts: true\n")
+			}
 		}
 	}
 	repair := repairEnabled(cfg) && (phase == model.PhaseStatic || phase == model.PhaseTest || phase == model.PhaseArtifact)
@@ -2262,7 +2266,7 @@ func writeGitLabPhaseJob(builder *strings.Builder, cfg model.Config, job string,
 		if !unsafeBindings {
 			phaseCommand = gitLabTrustedConfigPipelineCommand(cfg, phase)
 		}
-		builder.WriteString("    - |\n      set +e\n      output=\"$(" + phaseCommand + " 2>&1)\"\n      status=$?\n      set -e\n      printf '%s\\n' \"$output\"\n      receipt=\"$(printf '%s\\n' \"$output\" | sed -n 's/^Receipt: //p' | tail -n 1)\"\n      test -n \"$receipt\"\n      test -f \"$receipt\"\n      exit \"$status\"\n")
+		builder.WriteString("    - |\n" + gitLabCapturedPhaseScript(phaseCommand))
 	} else {
 		builder.WriteString("  script:\n")
 		if deploymentPhase(phase) {
@@ -2287,14 +2291,33 @@ func writeGitLabPhaseJob(builder *strings.Builder, cfg model.Config, job string,
 	}
 }
 
+func gitLabCapturedPhaseScript(phaseCommand string) string {
+	return "      output_file=\"$(mktemp)\"\n" +
+		"      status_file=\"$(mktemp)\"\n" +
+		"      trap 'rm -f \"$output_file\" \"$status_file\"' 0 HUP INT TERM\n" +
+		"      set +e\n" +
+		"      (\n" +
+		"        ( " + phaseCommand + " ) 2>&1\n" +
+		"        printf '%s\\n' \"$?\" >\"$status_file\"\n" +
+		"      ) | tee \"$output_file\"\n" +
+		"      tee_status=$?\n" +
+		"      set -e\n" +
+		"      test \"$tee_status\" -eq 0\n" +
+		"      status=\"$(cat \"$status_file\")\"\n" +
+		"      receipt=\"$(sed -n 's/^Receipt: //p' \"$output_file\" | tail -n 1)\"\n" +
+		"      test -n \"$receipt\"\n" +
+		"      test -f \"$receipt\"\n" +
+		"      rm -f \"$output_file\" \"$status_file\"\n" +
+		"      trap - 0 HUP INT TERM\n" +
+		"      exit \"$status\"\n"
+}
+
 func writeGitLabReviewJob(builder *strings.Builder, cfg model.Config, imageName string) {
 	builder.WriteString(`
 sam-harness-review:
   image: ` + yamlSingle(imageName) + `
   stage: review
-  needs:
-    - job: sam-harness-test
-      artifacts: true
+  needs: []
 `)
 	writeGitLabAgentEnvironment(builder, cfg, model.CISecretScopeReview)
 	builder.WriteString("  script:\n")
