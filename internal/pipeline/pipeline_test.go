@@ -316,7 +316,7 @@ func TestPhaseAllWritesOneReceiptForEveryExecutedLifecyclePhase(t *testing.T) {
 	writeFile(t, root, "source.txt", "base\n")
 	writeExecutable(t, root, "review-clean.sh", `#!/bin/sh
 cat >/dev/null
-printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P3","summary":"recorded","evidence":"fixture","path":"source.txt","line":1,"required_change":"preserve behavior","acceptance":"behavior remains stable"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
+printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P3","summary":"recorded","evidence":"fixture","path":"source.txt","line":1,"required_change":"preserve behavior","acceptance":"behavior remains stable","id":null}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
 `)
 	cfg := testPipelineConfig()
 	for index := range cfg.Workflow.Reviewers {
@@ -392,7 +392,7 @@ while [ "$(find "$REVIEW_BARRIER_DIR" -type f | wc -l | tr -d ' ')" -lt 6 ]; do
   [ "$attempt" -lt 200 ] || exit 39
   sleep 0.05
 done
-printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P2","summary":"recorded","evidence":"%s","path":"source.txt","line":1,"required_change":"remove %s from output","acceptance":"%s is absent"}]}\n' "$SAM_HARNESS_REVIEW_ROLE" "$REVIEW_AGENT_TOKEN" "$REVIEW_AGENT_TOKEN" "$REVIEW_AGENT_TOKEN"
+printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P2","summary":"recorded","evidence":"%s","path":"source.txt","line":1,"required_change":"remove %s from output","acceptance":"%s is absent","id":null}]}\n' "$SAM_HARNESS_REVIEW_ROLE" "$REVIEW_AGENT_TOKEN" "$REVIEW_AGENT_TOKEN" "$REVIEW_AGENT_TOKEN"
 `)
 	if err := copyRepository(root, base, copyForReview); err != nil {
 		t.Fatal(err)
@@ -443,20 +443,28 @@ printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P2","summar
 
 func TestParseReviewerOutputRequiresCompletePrescriptiveReview(t *testing.T) {
 	t.Parallel()
-	valid := `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"file.go","line":4,"required_change":"validate input before use","acceptance":"the unsafe input is rejected"}]}`
+	valid := `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"file.go","line":4,"required_change":"validate input before use","acceptance":"the unsafe input is rejected","id":null}]}`
 	findings, err := parseReviewerOutput(valid, model.ReviewerSecurity)
-	if err != nil || len(findings) != 1 || findings[0].RequiredChange == "" || findings[0].Acceptance == "" {
+	if err != nil || len(findings) != 1 || findings[0].ID != "" || findings[0].RequiredChange == "" || findings[0].Acceptance == "" {
 		t.Fatalf("complete prescriptive review was rejected: findings=%#v err=%v", findings, err)
+	}
+	textual := `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"file.go","line":4,"required_change":"validate input before use","acceptance":"the unsafe input is rejected","id":"frozen-action-id"}]}`
+	findings, err = parseReviewerOutput(textual, model.ReviewerSecurity)
+	if err != nil || len(findings) != 1 || findings[0].ID != "frozen-action-id" {
+		t.Fatalf("textual finding id was not preserved: findings=%#v err=%v", findings, err)
 	}
 	for name, output := range map[string]string{
 		"incomplete review":  `{"review_complete":false,"findings":[]}`,
-		"missing correction": `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"file.go","line":4,"acceptance":"fixed"}]}`,
-		"missing acceptance": `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"file.go","line":4,"required_change":"fix it"}]}`,
-		"missing path":       `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","line":4,"required_change":"fix it","acceptance":"fixed"}]}`,
-		"missing line":       `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"file.go","required_change":"fix it","acceptance":"fixed"}]}`,
-		"escaping path":      `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"../file.go","line":4,"required_change":"fix it","acceptance":"fixed"}]}`,
-		"padded path":        `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":" file.go ","line":4,"required_change":"fix it","acceptance":"fixed"}]}`,
-		"backslash path":     `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"dir\\file.go","line":4,"required_change":"fix it","acceptance":"fixed"}]}`,
+		"missing id":         `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"file.go","line":4,"required_change":"fix it","acceptance":"fixed"}]}`,
+		"padded id":          `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"file.go","line":4,"required_change":"fix it","acceptance":"fixed","id":" frozen-action-id "}]}`,
+		"whitespace-only id": `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"file.go","line":4,"required_change":"fix it","acceptance":"fixed","id":"   "}]}`,
+		"missing correction": `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"file.go","line":4,"acceptance":"fixed","id":null}]}`,
+		"missing acceptance": `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"file.go","line":4,"required_change":"fix it","id":null}]}`,
+		"missing path":       `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","line":4,"required_change":"fix it","acceptance":"fixed","id":null}]}`,
+		"missing line":       `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"file.go","required_change":"fix it","acceptance":"fixed","id":null}]}`,
+		"escaping path":      `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"../file.go","line":4,"required_change":"fix it","acceptance":"fixed","id":null}]}`,
+		"padded path":        `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":" file.go ","line":4,"required_change":"fix it","acceptance":"fixed","id":null}]}`,
+		"backslash path":     `{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"file.go:4","path":"dir\\file.go","line":4,"required_change":"fix it","acceptance":"fixed","id":null}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := parseReviewerOutput(output, model.ReviewerSecurity); err == nil {
@@ -473,7 +481,7 @@ func TestLowRiskReviewSkipsRolesAndStillBlocksOnP0(t *testing.T) {
 	writeExecutable(t, root, "review.sh", `#!/bin/sh
 role="$SAM_HARNESS_REVIEW_ROLE"
 if [ "$role" = correctness ]; then
-  printf '{"review_complete":true,"findings":[{"role":"correctness","severity":"P0","summary":"broken","evidence":"fail","path":"main.go","line":2,"required_change":"fix main","acceptance":"main passes"}]}\n'
+  printf '{"review_complete":true,"findings":[{"role":"correctness","severity":"P0","summary":"broken","evidence":"fail","path":"main.go","line":2,"required_change":"fix main","acceptance":"main passes","id":null}]}\n'
   exit 0
 fi
 printf '{"review_complete":true,"findings":[]}\n'
@@ -519,10 +527,10 @@ func TestReviewArbiterBlocksConflictingFindings(t *testing.T) {
 role="$SAM_HARNESS_REVIEW_ROLE"
 case "$role" in
   architecture)
-    printf '{"review_complete":true,"findings":[{"role":"architecture","severity":"P0","summary":"bug","evidence":"a","path":"file.go","line":4,"required_change":"change architecture","acceptance":"architecture passes"}]}\n'
+    printf '{"review_complete":true,"findings":[{"role":"architecture","severity":"P0","summary":"bug","evidence":"a","path":"file.go","line":4,"required_change":"change architecture","acceptance":"architecture passes","id":null}]}\n'
     ;;
   correctness)
-    printf '{"review_complete":true,"findings":[{"role":"correctness","severity":"P3","summary":"not a bug","evidence":"b","path":"file.go","line":4,"required_change":"keep behavior","acceptance":"behavior remains"}]}\n'
+    printf '{"review_complete":true,"findings":[{"role":"correctness","severity":"P3","summary":"not a bug","evidence":"b","path":"file.go","line":4,"required_change":"keep behavior","acceptance":"behavior remains","id":null}]}\n'
     ;;
   *)
     printf '{"review_complete":true,"findings":[]}\n'
@@ -545,7 +553,7 @@ func TestReviewArbiterKeepsIdenticalAttribution(t *testing.T) {
 	base := t.TempDir()
 	writeFile(t, root, "file.go", "one\ntwo\nthree\n")
 	writeExecutable(t, root, "review.sh", `#!/bin/sh
-printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P2","summary":"same","evidence":"e","path":"file.go","line":4,"required_change":"apply same fix","acceptance":"same issue passes"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
+printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P2","summary":"same","evidence":"e","path":"file.go","line":4,"required_change":"apply same fix","acceptance":"same issue passes","id":null}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
 `)
 	cfg := testPipelineConfig()
 	for index := range cfg.Workflow.Reviewers {
@@ -585,7 +593,7 @@ test -r "$patch_path"
 cat "$patch_path" > %q/"$SAM_HARNESS_REVIEW_ROLE.patch"
 printf '%%s' "$payload" > %q/"$SAM_HARNESS_REVIEW_ROLE.json"
 git diff --quiet HEAD -- && exit 51
-printf '{"review_complete":true,"findings":[{"role":"%%s","severity":"P3","summary":"change reviewed","evidence":"base-to-head","path":"source.txt","line":1,"required_change":"apply reviewed change","acceptance":"change is accepted"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
+printf '{"review_complete":true,"findings":[{"role":"%%s","severity":"P3","summary":"change reviewed","evidence":"base-to-head","path":"source.txt","line":1,"required_change":"apply reviewed change","acceptance":"change is accepted","id":null}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
 `, promptDirectory, promptDirectory))
 	cfg := testPipelineConfig()
 	for index := range cfg.Workflow.Reviewers {
@@ -623,6 +631,8 @@ printf '{"review_complete":true,"findings":[{"role":"%%s","severity":"P3","summa
 		HeadFingerprint string `json:"review_head_fingerprint"`
 		PatchPath       string `json:"review_patch_path"`
 		PatchSHA256     string `json:"review_patch_sha256"`
+		ReviewMode      string `json:"review_mode"`
+		Instruction     string `json:"instruction"`
 	}
 	promptData, err := os.ReadFile(filepath.Join(promptDirectory, string(model.ReviewerArchitecture)+".json"))
 	if err != nil {
@@ -633,6 +643,9 @@ printf '{"review_complete":true,"findings":[{"role":"%%s","severity":"P3","summa
 	}
 	if prompt.BaseRoot != receipt.ReviewBaseRoot || prompt.BaseSHA != receipt.ReviewBaseSHA || prompt.BaseFingerprint != receipt.ReviewBaseFingerprint || prompt.HeadSHA != receipt.ReviewHeadSHA || prompt.HeadFingerprint != receipt.ReviewHeadFingerprint || prompt.PatchPath == "" || !filepath.IsAbs(prompt.PatchPath) || prompt.PatchSHA256 != receipt.ReviewPatchSHA256 {
 		t.Fatalf("review prompt lineage differs from receipt: prompt=%#v receipt=%#v", prompt, receipt)
+	}
+	if prompt.ReviewMode != "initial" || !strings.Contains(prompt.Instruction, "id:null") || strings.Contains(prompt.Instruction, "This is a convergence re-review") {
+		t.Fatalf("initial review prompt has incorrect mode or instruction: %#v", prompt)
 	}
 	reviewerPatch, err := os.ReadFile(filepath.Join(promptDirectory, string(model.ReviewerArchitecture)+".patch"))
 	if err != nil {
@@ -647,6 +660,199 @@ printf '{"review_complete":true,"findings":[{"role":"%%s","severity":"P3","summa
 	}
 	if _, embedded := promptFields["review_patch"]; embedded {
 		t.Fatal("review prompt embedded the canonical patch body")
+	}
+}
+
+func TestReviewConvergenceRetainsPartialReviewerFailure(t *testing.T) {
+	root := t.TempDir()
+	base := t.TempDir()
+	writeFile(t, root, "source.txt", "base\n")
+	writeExecutable(t, root, "review.sh", `#!/bin/sh
+if [ "$SAM_HARNESS_REVIEW_ROLE" = security ]; then
+  printf '{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"unsafe","evidence":"source.txt:1","path":"source.txt","line":1,"required_change":"make the source safe","acceptance":"the source is safe","id":null}]}\n'
+  exit 0
+fi
+printf '{"review_complete":true,"findings":[]}\n'
+`)
+	cfg := testPipelineConfig()
+	for index := range cfg.Workflow.Reviewers {
+		cfg.Workflow.Reviewers[index].Command = []string{"./review.sh"}
+	}
+	writePipelineConfig(t, root, cfg)
+	if err := copyRepository(root, base, copyForReview); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "source.txt", "unsafe\n")
+	baseSHA := initializeTestGit(t, base)
+	priorHeadSHA := initializeTestGit(t, root)
+
+	prior, priorPath, err := RunWithOptions(root, model.PhaseReview, true, RunOptions{ReviewBase: base, ReviewBaseSHA: baseSHA, ReviewHeadSHA: priorHeadSHA})
+	if err == nil || priorPath == "" || prior.RepairManifest == nil || len(prior.RepairManifest.Actions) != 1 {
+		t.Fatalf("initial blocked review did not produce a frozen manifest: err=%v path=%q receipt=%#v", err, priorPath, prior)
+	}
+	actionID := prior.RepairManifest.Actions[0].ID
+	writeFile(t, root, "source.txt", "fixed\n")
+	writeExecutable(t, root, "review.sh", fmt.Sprintf(`#!/bin/sh
+case "$SAM_HARNESS_REVIEW_ROLE" in
+  security)
+    printf '{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"still unsafe","evidence":"source.txt:1","path":"source.txt","line":1,"required_change":"make the source safe","acceptance":"the source is safe","id":"%s"}]}\n'
+    ;;
+  correctness)
+    printf 'reviewer failed during convergence\n' >&2
+    exit 17
+    ;;
+  *)
+    printf '{"review_complete":true,"findings":[]}\n'
+    ;;
+esac
+`, actionID))
+	currentHeadSHA := initializeTestGit(t, root)
+
+	receipt, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{
+		ReviewBase:         base,
+		ReviewBaseSHA:      baseSHA,
+		ReviewHeadSHA:      currentHeadSHA,
+		PriorReviewReceipt: priorPath,
+	})
+	if err == nil || strings.Contains(err.Error(), "initial review finding id must be null") {
+		t.Fatalf("partial convergence returned the wrong result: err=%v receipt=%#v", err, receipt)
+	}
+	if receipt.Status != StatusBlocked || receipt.Passed || receipt.ReviewConvergence != reviewConvergenceBlocked || receipt.PriorReviewReceipt != priorPath || len(receipt.UnresolvedFindingIDs) != 1 || receipt.UnresolvedFindingIDs[0] != actionID {
+		t.Fatalf("partial convergence context was not retained: %#v", receipt)
+	}
+	failureRetained := false
+	for _, command := range receipt.Commands {
+		if command.Name == "review:correctness" && !command.Passed && command.ExitCode == 17 && strings.Contains(command.Output, "reviewer failed during convergence") {
+			failureRetained = true
+		}
+	}
+	if !failureRetained {
+		t.Fatalf("underlying reviewer failure was not retained: %#v", receipt.Commands)
+	}
+	html, htmlErr := receiptHTML(receipt)
+	if htmlErr != nil {
+		t.Fatal(htmlErr)
+	}
+	for _, required := range []string{"INCOMPLETE REVIEW", "review:correctness", "reviewer failed during convergence"} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("partial convergence HTML omitted %q:\n%s", required, html)
+		}
+	}
+
+	writeExecutable(t, root, "review.sh", `#!/bin/sh
+if [ "$SAM_HARNESS_REVIEW_ROLE" = security ]; then
+  printf 'frozen action reviewer failed during convergence\n' >&2
+  exit 19
+fi
+printf '{"review_complete":true,"findings":[]}\n'
+`)
+	failedOwnerHeadSHA := initializeTestGit(t, root)
+	receipt, _, err = RunWithOptions(root, model.PhaseReview, false, RunOptions{
+		ReviewBase:         base,
+		ReviewBaseSHA:      baseSHA,
+		ReviewHeadSHA:      failedOwnerHeadSHA,
+		PriorReviewReceipt: priorPath,
+	})
+	if err == nil || strings.Contains(err.Error(), "initial review finding id must be null") {
+		t.Fatalf("failed frozen-action reviewer returned the wrong result: err=%v receipt=%#v", err, receipt)
+	}
+	if receipt.Status != StatusBlocked || receipt.Passed || receipt.ReviewConvergence != reviewConvergenceBlocked || len(receipt.ResolvedFindingIDs) != 0 || len(receipt.UnresolvedFindingIDs) != 1 || receipt.UnresolvedFindingIDs[0] != actionID {
+		t.Fatalf("failed reviewer incorrectly resolved its frozen action: %#v", receipt)
+	}
+	actionUnresolved := false
+	for _, finding := range receipt.Findings {
+		if finding.ID == actionID && finding.Role == model.ReviewerSecurity && finding.Status == findingStatusUnresolved {
+			actionUnresolved = true
+		}
+	}
+	if !actionUnresolved {
+		t.Fatalf("failed reviewer's frozen action was not retained as unresolved: %#v", receipt.Findings)
+	}
+	failureRetained = false
+	for _, command := range receipt.Commands {
+		if command.Name == "review:security" && !command.Passed && command.ExitCode == 19 && strings.Contains(command.Output, "frozen action reviewer failed during convergence") {
+			failureRetained = true
+		}
+	}
+	if !failureRetained {
+		t.Fatalf("failed frozen-action reviewer command was not retained: %#v", receipt.Commands)
+	}
+	html, htmlErr = receiptHTML(receipt)
+	if htmlErr != nil {
+		t.Fatal(htmlErr)
+	}
+	for _, required := range []string{"INCOMPLETE REVIEW", "review:security", "frozen action reviewer failed during convergence"} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("failed frozen-action reviewer HTML omitted %q:\n%s", required, html)
+		}
+	}
+	for _, forbidden := range []string{"CLEAN —", "converged"} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("failed frozen-action reviewer HTML contains misleading claim %q:\n%s", forbidden, html)
+		}
+	}
+
+	for _, scenario := range []struct {
+		name             string
+		correctness      string
+		exitCode         int
+		failureSubstring string
+	}{
+		{
+			name:             "nonzero exit",
+			correctness:      "printf 'other reviewer failed after owner resolved\\n' >&2\n  exit 23",
+			exitCode:         23,
+			failureSubstring: "other reviewer failed after owner resolved",
+		},
+		{
+			name:             "malformed output",
+			correctness:      "printf 'malformed convergence output\\n'\n  exit 0",
+			exitCode:         0,
+			failureSubstring: "malformed convergence output",
+		},
+	} {
+		t.Run("resolved owner with "+scenario.name, func(t *testing.T) {
+			writeExecutable(t, root, "review.sh", fmt.Sprintf(`#!/bin/sh
+if [ "$SAM_HARNESS_REVIEW_ROLE" = correctness ]; then
+  %s
+fi
+printf '{"review_complete":true,"findings":[]}\n'
+`, scenario.correctness))
+			aggregateHeadSHA := initializeTestGit(t, root)
+			receipt, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{
+				ReviewBase:         base,
+				ReviewBaseSHA:      baseSHA,
+				ReviewHeadSHA:      aggregateHeadSHA,
+				PriorReviewReceipt: priorPath,
+			})
+			if err == nil {
+				t.Fatalf("incomplete convergence was accepted: %#v", receipt)
+			}
+			if receipt.Status != StatusBlocked || receipt.Passed || receipt.ReviewConvergence != reviewConvergenceBlocked || len(receipt.ResolvedFindingIDs) != 1 || receipt.ResolvedFindingIDs[0] != actionID || len(receipt.UnresolvedFindingIDs) != 0 {
+				t.Fatalf("incomplete convergence lost the successful resolution or passed overall: %#v", receipt)
+			}
+			failureRetained := false
+			for _, command := range receipt.Commands {
+				if command.Name == "review:correctness" && !command.Passed && command.ExitCode == scenario.exitCode && strings.Contains(command.Output, scenario.failureSubstring) {
+					failureRetained = true
+				}
+			}
+			if !failureRetained {
+				t.Fatalf("incomplete reviewer evidence was not retained: %#v", receipt.Commands)
+			}
+			html, htmlErr := receiptHTML(receipt)
+			if htmlErr != nil {
+				t.Fatal(htmlErr)
+			}
+			if !strings.Contains(html, "INCOMPLETE REVIEW") {
+				t.Fatalf("incomplete convergence HTML omitted its state:\n%s", html)
+			}
+			for _, forbidden := range []string{"CLEAN", "converged"} {
+				if strings.Contains(html, forbidden) {
+					t.Fatalf("incomplete convergence HTML contains misleading claim %q:\n%s", forbidden, html)
+				}
+			}
+		})
 	}
 }
 
@@ -907,7 +1113,7 @@ func TestSecretBearingReviewUsesTrustedConfigArgumentAndRequiresBase(t *testing.
 payload=$(cat)
 test "$REVIEW_TOKEN" = review-secret || exit 61
 test "$(cat "$1")" = trusted || exit 62
-printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P3","summary":"trusted","evidence":"schema","path":"source.txt","line":1,"required_change":"apply trusted correction","acceptance":"trusted schema passes"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
+printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P3","summary":"trusted","evidence":"schema","path":"source.txt","line":1,"required_change":"apply trusted correction","acceptance":"trusted schema passes","id":null}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
 `)
 	writeFile(t, trusted, "reviewer-output.schema.json", "trusted\n")
 
@@ -1020,7 +1226,7 @@ func TestReviewDetectsBaseAndHeadGitIdentityDrift(t *testing.T) {
 			writeExecutable(t, root, "review.sh", fmt.Sprintf(`#!/bin/sh
 cat >/dev/null
 git -C %q -c user.name=review-drift -c user.email=review@localhost commit --allow-empty --no-verify -m drift >/dev/null 2>&1 || true
-printf '{"review_complete":true,"findings":[{"role":"%%s","severity":"P3","summary":"reviewed","evidence":"identity","path":"source.txt","line":1,"required_change":"preserve identity","acceptance":"identity is stable"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
+printf '{"review_complete":true,"findings":[{"role":"%%s","severity":"P3","summary":"reviewed","evidence":"identity","path":"source.txt","line":1,"required_change":"preserve identity","acceptance":"identity is stable","id":null}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
 `, driftRoot))
 			cfg := testPipelineConfig()
 			for index := range cfg.Workflow.Reviewers {
@@ -1047,14 +1253,29 @@ func TestReviewBlocksP1MalformedOutputAndRepositoryMutation(t *testing.T) {
 		name       string
 		security   string
 		errorMatch string
+		exactError bool
+		htmlReason string
 	}{
 		{
 			name:       "P1",
-			security:   `printf '{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"blocker","evidence":"fixture","path":"source.txt","line":1,"required_change":"remove blocker","acceptance":"blocker is absent"}]}\n'`,
+			security:   `printf '{"review_complete":true,"findings":[{"role":"security","severity":"P1","summary":"blocker","evidence":"fixture","path":"source.txt","line":1,"required_change":"remove blocker","acceptance":"blocker is absent","id":null}]}\n'`,
 			errorMatch: "review blocked",
 		},
 		{name: "malformed", security: `printf 'not-json\n'`, errorMatch: "review blocked"},
 		{name: "mutation", security: `printf 'mutation\n' > source.txt; printf '{"review_complete":true,"findings":[]}\n'`, errorMatch: "mutated the repository"},
+		{
+			name:       "initial textual id",
+			security:   `printf '{"review_complete":true,"findings":[{"role":"security","severity":"P3","summary":"change reviewed","evidence":"fixture","path":"source.txt","line":1,"required_change":"apply reviewed change","acceptance":"change is accepted","id":"reviewer-supplied-id"}]}\n'`,
+			errorMatch: "initial review finding id must be null; use id:null",
+			exactError: true,
+			htmlReason: "initial review finding id must be null; use id:null",
+		},
+		{
+			name:       "whitespace textual id",
+			security:   `printf '{"review_complete":true,"findings":[{"role":"security","severity":"P3","summary":"change reviewed","evidence":"fixture","path":"source.txt","line":1,"required_change":"apply reviewed change","acceptance":"change is accepted","id":"   "}]}\n'`,
+			errorMatch: "review blocked",
+			htmlReason: "finding 0 id must be null or a non-empty string without surrounding whitespace",
+		},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -1086,6 +1307,27 @@ fi
 			}
 			if receipt.Status != StatusBlocked || receipt.Passed {
 				t.Fatalf("unsafe review did not block: %#v", receipt)
+			}
+			if scenario.exactError {
+				if receipt.Error != scenario.errorMatch {
+					t.Fatalf("initial textual id block reason = %q, want %q", receipt.Error, scenario.errorMatch)
+				}
+			}
+			if scenario.htmlReason != "" {
+				html, htmlErr := receiptHTML(receipt)
+				if htmlErr != nil {
+					t.Fatal(htmlErr)
+				}
+				for _, required := range []string{scenario.htmlReason, "INCOMPLETE REVIEW — no approval or complete correction manifest exists."} {
+					if !strings.Contains(html, required) {
+						t.Fatalf("invalid textual id HTML omitted %q:\n%s", required, html)
+					}
+				}
+				for _, forbidden := range []string{"No findings were recorded.", "CLEAN — no findings were recorded."} {
+					if strings.Contains(html, forbidden) {
+						t.Fatalf("invalid textual id HTML contains misleading value %q", forbidden)
+					}
+				}
 			}
 			if scenario.name == "mutation" {
 				content, readErr := os.ReadFile(filepath.Join(root, "source.txt"))

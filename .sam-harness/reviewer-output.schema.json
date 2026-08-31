@@ -13,10 +13,10 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["role", "severity", "summary", "evidence", "path", "line", "required_change", "acceptance"],
+        "required": ["role", "severity", "summary", "evidence", "path", "line", "required_change", "acceptance", "id"],
         "properties": {
           "id": {
-            "type": "string",
+            "type": ["string", "null"],
             "minLength": 1
           },
           "role": {

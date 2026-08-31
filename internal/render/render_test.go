@@ -2,6 +2,7 @@ package render
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,7 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestBuildGeneratesExhaustiveReviewerOutputSchema(t *testing.T) {
+func TestBuildGeneratesStrictReviewerOutputSchema(t *testing.T) {
 	t.Parallel()
 	operations, err := Build(model.ScanResult{Root: t.TempDir()}, model.ProfileBaseline, answers())
 	if err != nil {
@@ -28,7 +29,7 @@ func TestBuildGeneratesExhaustiveReviewerOutputSchema(t *testing.T) {
 		t.Fatalf("reviewer output schema is not JSON: %v", err)
 	}
 	if content == string(harnessschema.ReviewerOutputJSON) || !strings.Contains(content, `"id": {`) {
-		t.Fatalf("generated reviewer schema does not add the optional convergence id:\n%s", content)
+		t.Fatalf("generated reviewer schema does not add the nullable convergence id:\n%s", content)
 	}
 	var generatedFindings map[string]any
 	if err := json.Unmarshal([]byte(content), &generatedFindings); err != nil {
@@ -37,14 +38,15 @@ func TestBuildGeneratesExhaustiveReviewerOutputSchema(t *testing.T) {
 	generatedProperties := generatedFindings["properties"].(map[string]any)
 	findingsProperties := generatedProperties["findings"].(map[string]any)
 	itemProperties := findingsProperties["items"].(map[string]any)["properties"].(map[string]any)
-	if _, ok := itemProperties["id"]; !ok {
-		t.Fatal("generated reviewer schema omitted optional finding id")
+	idSchema, ok := itemProperties["id"].(map[string]any)
+	if !ok || !reflect.DeepEqual(idSchema["type"], []any{"string", "null"}) || idSchema["minLength"] != float64(1) {
+		t.Fatalf("generated reviewer schema has incorrect nullable finding id: %#v", itemProperties["id"])
 	}
-	for _, required := range findingsProperties["items"].(map[string]any)["required"].([]any) {
-		if required == "id" {
-			t.Fatal("finding id must remain optional for initial reviews")
-		}
+	itemSchema := findingsProperties["items"].(map[string]any)
+	if !containsString(itemSchema["required"].([]any), "id") {
+		t.Fatal("finding id must be required for initial and convergence reviews")
 	}
+	assertStrictObjectSchemas(t, schema, "generated")
 	checkedIn, err := os.ReadFile(filepath.Join("..", "..", ".sam-harness", "reviewer-output.schema.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -53,8 +55,43 @@ func TestBuildGeneratesExhaustiveReviewerOutputSchema(t *testing.T) {
 	if err := json.Unmarshal(checkedIn, &checkedInSchema); err != nil {
 		t.Fatal(err)
 	}
+	assertStrictObjectSchemas(t, checkedInSchema, "checked-in")
 	if !reflect.DeepEqual(schema, checkedInSchema) {
 		t.Fatal("checked-in reviewer schema differs structurally from canonical schema")
+	}
+}
+
+func containsString(values []any, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func assertStrictObjectSchemas(t *testing.T, value any, path string) {
+	t.Helper()
+	switch node := value.(type) {
+	case map[string]any:
+		if properties, ok := node["properties"].(map[string]any); ok {
+			required, ok := node["required"].([]any)
+			if !ok {
+				t.Fatalf("%s has properties but no required array", path)
+			}
+			for property := range properties {
+				if !containsString(required, property) {
+					t.Fatalf("%s does not require property %q", path, property)
+				}
+			}
+		}
+		for key, child := range node {
+			assertStrictObjectSchemas(t, child, path+"."+key)
+		}
+	case []any:
+		for index, child := range node {
+			assertStrictObjectSchemas(t, child, fmt.Sprintf("%s[%d]", path, index))
+		}
 	}
 }
 
