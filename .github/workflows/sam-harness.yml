@@ -22,6 +22,7 @@ on:
       # Configured IANA timezone: UTC; GitHub evaluates cron in UTC.
 
 permissions:
+  actions: read
   contents: read
   pull-requests: read
 
@@ -59,7 +60,9 @@ jobs:
           receipt="$(printf '%s\n' "$output" | sed -n 's/^Receipt: //p' | tail -n 1)"
           test -n "$receipt"
           test -f "$receipt"
-          printf 'phase_receipt=%s\n' "$receipt" >> "$GITHUB_OUTPUT"
+          receipt_html="${receipt%.json}.html"
+          test -f "$receipt_html"
+          printf 'phase_receipt=%s\nphase_receipt_html=%s\n' "$receipt" "$receipt_html" >> "$GITHUB_OUTPUT"
           exit "$status"
       - name: Preserve phase receipts
         if: always()
@@ -67,7 +70,9 @@ jobs:
         with:
           name: sam-harness-receipts-static
           if-no-files-found: error
-          path: ${{ steps.phase.outputs.phase_receipt }}
+          path: |
+            ${{ steps.phase.outputs.phase_receipt }}
+            ${{ steps.phase.outputs.phase_receipt_html }}
 
       - name: Preserve the failed phase status
         if: steps.phase.outcome == 'failure'
@@ -105,7 +110,9 @@ jobs:
           receipt="$(printf '%s\n' "$output" | sed -n 's/^Receipt: //p' | tail -n 1)"
           test -n "$receipt"
           test -f "$receipt"
-          printf 'phase_receipt=%s\n' "$receipt" >> "$GITHUB_OUTPUT"
+          receipt_html="${receipt%.json}.html"
+          test -f "$receipt_html"
+          printf 'phase_receipt=%s\nphase_receipt_html=%s\n' "$receipt" "$receipt_html" >> "$GITHUB_OUTPUT"
           exit "$status"
       - name: Preserve phase receipts
         if: always()
@@ -113,7 +120,9 @@ jobs:
         with:
           name: sam-harness-receipts-test
           if-no-files-found: error
-          path: ${{ steps.phase.outputs.phase_receipt }}
+          path: |
+            ${{ steps.phase.outputs.phase_receipt }}
+            ${{ steps.phase.outputs.phase_receipt_html }}
 
       - name: Preserve the failed phase status
         if: steps.phase.outcome == 'failure'
@@ -151,7 +160,9 @@ jobs:
           receipt="$(printf '%s\n' "$output" | sed -n 's/^Receipt: //p' | tail -n 1)"
           test -n "$receipt"
           test -f "$receipt"
-          printf 'phase_receipt=%s\n' "$receipt" >> "$GITHUB_OUTPUT"
+          receipt_html="${receipt%.json}.html"
+          test -f "$receipt_html"
+          printf 'phase_receipt=%s\nphase_receipt_html=%s\n' "$receipt" "$receipt_html" >> "$GITHUB_OUTPUT"
           exit "$status"
       - name: Package immutable artifact with path and mode metadata
         if: steps.phase.outcome == 'success'
@@ -170,7 +181,9 @@ jobs:
         with:
           name: sam-harness-receipts-artifact
           if-no-files-found: error
-          path: ${{ steps.phase.outputs.phase_receipt }}
+          path: |
+            ${{ steps.phase.outputs.phase_receipt }}
+            ${{ steps.phase.outputs.phase_receipt_html }}
 
       - name: Preserve the failed phase status
         if: steps.phase.outcome == 'failure'

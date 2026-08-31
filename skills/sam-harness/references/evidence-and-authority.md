@@ -41,7 +41,7 @@ Provider-bound agent secrets also require an external command boundary. The cano
 
 Stop on missing evidence, scope drift, stale plans, ambiguous destructive targets, or required gate failures. Preserve the real error and the relevant receipt. Prefer reversible operations. A code rollback is not a data rollback; check compatibility and recovery state first.
 
-Receipts are immutable evidence about one execution, not reusable permission. Preserve the repository fingerprint, timestamps, command argv, findings, complete repair manifest and its hash, review base/head fingerprints and patch hash, artifact/SBOM/provenance hashes, source fingerprint, repair patch hash when applicable, and exact final status. A blocked receipt never proves a later phase. A manifest prescribes one bounded correction; only a fresh independent review proves that the resulting change is clean.
+Receipts are immutable evidence about one execution, not reusable permission. Preserve the repository fingerprint, timestamps, command argv, findings, complete repair manifest and its hash, review base/head fingerprints and patch hash, review lineage and convergence ledger when applicable, artifact/SBOM/provenance hashes, source fingerprint, repair patch hash when applicable, and exact final status. Every JSON receipt has a standalone escaped HTML companion with the same human-readable identities and acceptance data. A blocked receipt never proves a later phase. A manifest prescribes one bounded correction; only a fresh independent review proves that the resulting change is clean.
 
 ## Delegation
 

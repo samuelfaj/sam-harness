@@ -243,7 +243,7 @@ func (c *CLI) check(args []string) error {
 }
 
 func (c *CLI) pipeline(args []string) error {
-	options, err := parseOptions(args, map[string]bool{"config": true, "format": true, "phase": true, "receipt": true, "review-base": true, "review-base-sha": true, "review-head-sha": true, "risk": true})
+	options, err := parseOptions(args, map[string]bool{"config": true, "format": true, "phase": true, "receipt": true, "review-base": true, "review-base-sha": true, "review-head-sha": true, "prior-review-receipt": true, "risk": true})
 	if err != nil {
 		return err
 	}
@@ -256,11 +256,12 @@ func (c *CLI) pipeline(args []string) error {
 		return err
 	}
 	report, receipt, runErr := pipelinerun.RunWithOptions(options.path(), phase, writeReceipt, pipelinerun.RunOptions{
-		ConfigPath:    options.values["config"],
-		ReviewBase:    options.values["review-base"],
-		ReviewBaseSHA: options.values["review-base-sha"],
-		ReviewHeadSHA: options.values["review-head-sha"],
-		Risk:          options.values["risk"],
+		ConfigPath:         options.values["config"],
+		ReviewBase:         options.values["review-base"],
+		ReviewBaseSHA:      options.values["review-base-sha"],
+		ReviewHeadSHA:      options.values["review-head-sha"],
+		PriorReviewReceipt: options.values["prior-review-receipt"],
+		Risk:               options.values["risk"],
 	})
 	if options.value("format", "human") == "json" {
 		if err := writeJSON(c.Stdout, struct {
@@ -326,6 +327,9 @@ func writePipelineReport(writer io.Writer, report pipelinerun.Receipt, receipt s
 	}
 	for _, finding := range report.Findings {
 		fmt.Fprintf(writer, "%s %s: %s\n", finding.Severity, finding.Role, finding.Summary)
+	}
+	if report.ReviewConvergence != "" {
+		fmt.Fprintf(writer, "Convergence: %s\n", report.ReviewConvergence)
 	}
 	if report.Artifact != nil {
 		fmt.Fprintf(writer, "Artifact: %s sha256:%s\n", report.Artifact.Path, report.Artifact.SHA256)
@@ -1145,7 +1149,7 @@ Usage:
   sam-harness status [path] [--format human|json] [--checks-file file]
   sam-harness publish [path] --branch name --title text --paths a,b [--body text] [--base sha]
   sam-harness check [path] [--format human|json] [--receipt true|false]
-  sam-harness pipeline [path] [--config absolute-or-contained-file] [--review-base absolute-directory --review-base-sha hex --review-head-sha hex] [--risk low|medium|high|critical] --phase static|test|review|artifact|staging|production|observe|rollback|migration|all [--receipt true|false]
+  sam-harness pipeline [path] [--config absolute-or-contained-file] [--review-base absolute-directory --review-base-sha hex --review-head-sha hex] [--prior-review-receipt file] [--risk low|medium|high|critical] --phase static|test|review|artifact|staging|production|observe|rollback|migration|all [--receipt true|false]
   sam-harness repair [path] [--config absolute-or-contained-file] --receipt file [--receipt-output true|false]
   sam-harness doctor [path] [--format human|json]
   sam-harness upgrade [path] --to version [--answers file] [--output file]
@@ -1153,7 +1157,8 @@ Usage:
 
 For pipeline and repair, --config defaults to <path>/.sam-harness/config.yaml.
 An override must be an absolute regular file or a relative regular file contained by <path>.
-Secret-bearing review requires all three review-base flags; both SHAs are verified against Git HEAD before and after review.`)
+Secret-bearing review requires all three review-base flags; both SHAs are verified against Git HEAD before and after review.
+Re-review may provide --prior-review-receipt to close its frozen manifest lineage.`)
 }
 
 func Main(args []string, stdout, stderr io.Writer) int {

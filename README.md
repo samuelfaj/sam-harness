@@ -42,7 +42,7 @@ Pregunta lo que el repositorio no demuestra, adáptalo al proyecto, implementa l
 5. `apply` rejects stale repository state and writes only the approved operations.
 6. `doctor` validates the installed structure. `check` runs the configured local gates and writes an evidence receipt.
 7. `pipeline` runs an approved phase—static checks, tests, pre-merge six-role review, artifact, staging, production, observation, rollback, or migration—and writes a phase-specific receipt.
-8. If `static`, `test`, `review`, or `artifact` fails and correction was explicitly enabled, `repair` validates the current receipt, runs the configured command in an isolated Git sandbox, enforces cumulative attempt/file/line budgets, reruns static checks and tests, and emits a correction-only patch with its SHA-256. Failed review receipts carry one hashed repair manifest containing every reviewer's exact required change and observable acceptance condition, so correction addresses all known work together before independent re-review.
+8. If `static`, `test`, `review`, or `artifact` fails and correction was explicitly enabled, `repair` validates the current receipt, runs the configured command in an isolated Git sandbox, enforces cumulative attempt/file/line budgets, reruns static checks and tests, and emits a correction-only patch with its SHA-256. Failed review receipts carry one frozen hashed repair manifest containing every reviewer's exact required change and observable acceptance condition, so correction addresses all known work together before one independent convergence re-review.
 
 Sam Harness preserves existing `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, Copilot instructions, `.gitignore`, and GitLab CI content through bounded managed blocks. It adds workflow, reviewer, change-budget, observation, and retirement guidance without replacing user-owned content.
 
@@ -64,7 +64,7 @@ sam-harness publish [path] --branch name --title text --paths a,b [--body text] 
 sam-harness check [path] [--format human|json] [--receipt true|false]
 sam-harness doctor [path]
 sam-harness upgrade [path] --to <version> [--answers <file>] [--output <file>]
-sam-harness pipeline [path] [--config <absolute-or-contained-file>] [--review-base <absolute-directory> --review-base-sha <hex> --review-head-sha <hex>] --phase <static|test|review|artifact|staging|production|observe|rollback|migration|all> [--receipt true|false]
+sam-harness pipeline [path] [--config <absolute-or-contained-file>] [--review-base <absolute-directory> --review-base-sha <hex> --review-head-sha <hex>] [--prior-review-receipt <file>] --phase <static|test|review|artifact|staging|production|observe|rollback|migration|all> [--receipt true|false]
 sam-harness repair [path] [--config <absolute-or-contained-file>] --receipt <file> [--receipt-output true|false]
 ```
 
@@ -104,6 +104,8 @@ sam-harness pipeline /path/to/repository --phase observe --receipt true
 
 `--review-base`, `--review-base-sha`, and `--review-head-sha` are valid only for `review` or `all`; the SHA flags must appear together and require the base directory. Secret-bearing review requires all three. The 40- or 64-character hexadecimal SHAs must equal the checked-out base and target `HEAD` before and after review. The receipt records `review_base_root`, `review_base_sha`, `review_base_fingerprint`, `review_head_sha`, `review_head_fingerprint`, the canonical `review_patch`, and `review_patch_sha256`; any identity or content drift blocks. A head-only local review without `--review-base` may still be useful, but it does not satisfy the required pre-merge delta gate.
 
+Initial review findings must identify a current added or modified line in the base-to-head patch, or line `0` only for deletion-only, deleted, or pure-rename file-level evidence. A convergence re-review may use `--prior-review-receipt <file>` to verify closure of that frozen manifest; a returned frozen ID is valid only for the same reviewer role, while new findings use the same scope rule in the prior-head-to-current-head patch. Unrelated pre-existing findings do not start another loop, and missing proof fails closed. Every JSON receipt is accompanied by an escaped standalone HTML receipt beside it.
+
 `--phase all` is convenient in an already approved automated workflow, but it does not waive protected-production or manual approvals; supply the base directory and SHA pair when `all` must satisfy provider-bound pre-merge review. Rollback is never part of `all` and is never started automatically after a failure; run its independent manual entry point only when the matching runbook and authority apply:
 
 ```bash
@@ -123,7 +125,7 @@ If change-request publishing is enabled and separately authorized, CI sends that
 To upgrade a legacy production installation, provide the required current-version workflow decisions in an answers file:
 
 ```bash
-sam-harness upgrade /path/to/repository --to 0.6.1 --answers /tmp/sam-harness-v0.6-answers.json
+sam-harness upgrade /path/to/repository --to 0.7.0 --answers /tmp/sam-harness-v0.7-answers.json
 ```
 
 `upgrade` merges explicit answers over the installed configuration and produces an expiring plan; it does not apply it. Review unresolved decisions and every operation, then approve and apply the exact new plan ID. Use the [workflow configuration shape](skills/sam-harness/references/workflow-configuration.md) for the static/test guard coverage, provider secret-name, protected-agent-environment and agent-control-plane decisions, filesystem and trusted-command attestations, and lifecycle commands that legacy v0.1 production configuration does not contain.

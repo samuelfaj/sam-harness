@@ -37,6 +37,7 @@ A gate advances only when its stated evidence exists. Fluent output is not evide
 - [ ] Commit: the commit SHA contains the reviewed change.
 - [ ] Remote: the expected remote branch contains that SHA.
 - [ ] Review: findings and approvals belong to the same SHA.
+- [ ] Review findings identify a current added or modified diff line, or line 0 only for deletion-only, deleted, or pure-rename file-level evidence; convergence closure references the frozen manifest and same-role IDs, and new P0/P1 regressions follow the same prior-head-to-current-head scope rule.
 - [ ] CI: required jobs passed for the reviewed SHA.
 - [ ] Artifact: the immutable digest came from that CI run.
 - [ ] Deployment: the environment reports that exact digest.

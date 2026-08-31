@@ -58,6 +58,14 @@ printf 'static ran\n'
 	if decoded.Repository != "fixture" || decoded.Phase != model.PhaseStatic || !decoded.Passed {
 		t.Fatalf("written receipt = %#v", decoded)
 	}
+	htmlPath := strings.TrimSuffix(receiptPath, ".json") + ".html"
+	html, err := os.ReadFile(htmlPath)
+	if err != nil {
+		t.Fatalf("receipt HTML sidecar is not durable: %v", err)
+	}
+	if !strings.Contains(string(html), "Sam Harness static receipt") || !strings.Contains(string(html), "Harness version") {
+		t.Fatalf("receipt HTML lacks human-readable identity: %s", html)
+	}
 
 	execution := execute(root, model.PhaseStatic, model.CommandSpec{
 		Name:     "escape",
@@ -302,7 +310,9 @@ func TestReadOnlyGateIgnoresDependencyCacheMutationButStillTracksSource(t *testi
 
 func TestPhaseAllWritesOneReceiptForEveryExecutedLifecyclePhase(t *testing.T) {
 	root := t.TempDir()
+	base := t.TempDir()
 	writeArtifactFixture(t, root)
+	writeFile(t, root, "source.txt", "base\n")
 	writeExecutable(t, root, "review-clean.sh", `#!/bin/sh
 cat >/dev/null
 printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P3","summary":"recorded","evidence":"fixture","path":"source.txt","line":1,"required_change":"preserve behavior","acceptance":"behavior remains stable"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
@@ -312,8 +322,14 @@ printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P3","summar
 		cfg.Workflow.Reviewers[index].Command = []string{"./review-clean.sh"}
 	}
 	writePipelineConfig(t, root, cfg)
+	if err := copyRepository(root, base, copyForReview); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "source.txt", "head\n")
+	baseSHA := initializeTestGit(t, base)
+	headSHA := initializeTestGit(t, root)
 
-	receipt, receiptPath, err := Run(root, model.PhaseAll, true)
+	receipt, receiptPath, err := RunWithOptions(root, model.PhaseAll, true, RunOptions{ReviewBase: base, ReviewBaseSHA: baseSHA, ReviewHeadSHA: headSHA})
 	if err != nil {
 		t.Fatalf("all phases failed: %v\n%#v", err, receipt)
 	}
@@ -354,6 +370,7 @@ func TestReviewRunsSixRolesInParallelAndKeepsDeterministicOrder(t *testing.T) {
 	t.Setenv("REVIEW_BARRIER_DIR", barrier)
 	writeFile(t, root, "node_modules/pkg/marker.txt", "must-not-be-copied\n")
 	writeFile(t, root, "vendor/pkg/marker.txt", "must-not-be-copied\n")
+	writeFile(t, root, "source.txt", "base\n")
 	reviewCommand := filepath.Join(trusted, "review.sh")
 	writeExecutable(t, trusted, "review.sh", `#!/bin/sh
 payload=$(cat)
@@ -379,6 +396,7 @@ printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P2","summar
 	if err := copyRepository(root, base, copyForReview); err != nil {
 		t.Fatal(err)
 	}
+	writeFile(t, root, "source.txt", "head\n")
 	cfg := testPipelineConfig()
 	cfg.CI.Providers = []string{"github"}
 	cfg.CI.SecretBindings = map[string][]model.CISecretBinding{"github": {
@@ -449,10 +467,12 @@ func TestParseReviewerOutputRequiresCompletePrescriptiveReview(t *testing.T) {
 
 func TestLowRiskReviewSkipsRolesAndStillBlocksOnP0(t *testing.T) {
 	root := t.TempDir()
+	base := t.TempDir()
+	writeFile(t, root, "main.go", "package main\n")
 	writeExecutable(t, root, "review.sh", `#!/bin/sh
 role="$SAM_HARNESS_REVIEW_ROLE"
 if [ "$role" = correctness ]; then
-  printf '{"review_complete":true,"findings":[{"role":"correctness","severity":"P0","summary":"broken","evidence":"fail","path":"main.go","line":1,"required_change":"fix main","acceptance":"main passes"}]}\n'
+  printf '{"review_complete":true,"findings":[{"role":"correctness","severity":"P0","summary":"broken","evidence":"fail","path":"main.go","line":2,"required_change":"fix main","acceptance":"main passes"}]}\n'
   exit 0
 fi
 printf '{"review_complete":true,"findings":[]}\n'
@@ -462,7 +482,13 @@ printf '{"review_complete":true,"findings":[]}\n'
 		cfg.Workflow.Reviewers[index].Command = []string{"./review.sh"}
 	}
 	writePipelineConfig(t, root, cfg)
-	receipt, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{Risk: model.ChangeRiskLow})
+	if err := copyRepository(root, base, copyForReview); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "main.go", "package main\nfunc main() {}\n")
+	baseSHA := initializeTestGit(t, base)
+	headSHA := initializeTestGit(t, root)
+	receipt, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{ReviewBase: base, ReviewBaseSHA: baseSHA, ReviewHeadSHA: headSHA, Risk: model.ChangeRiskLow})
 	if err == nil || receipt.Passed || receipt.Status != StatusBlocked {
 		t.Fatalf("low-risk P0 was accepted: err=%v receipt=%#v", err, receipt)
 	}
@@ -515,6 +541,8 @@ esac
 
 func TestReviewArbiterKeepsIdenticalAttribution(t *testing.T) {
 	root := t.TempDir()
+	base := t.TempDir()
+	writeFile(t, root, "file.go", "one\ntwo\nthree\n")
 	writeExecutable(t, root, "review.sh", `#!/bin/sh
 printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P2","summary":"same","evidence":"e","path":"file.go","line":4,"required_change":"apply same fix","acceptance":"same issue passes"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
 `)
@@ -523,7 +551,13 @@ printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P2","summar
 		cfg.Workflow.Reviewers[index].Command = []string{"./review.sh"}
 	}
 	writePipelineConfig(t, root, cfg)
-	receipt, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{Risk: model.ChangeRiskLow})
+	if err := copyRepository(root, base, copyForReview); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "file.go", "one\ntwo\nthree\nfour\n")
+	baseSHA := initializeTestGit(t, base)
+	headSHA := initializeTestGit(t, root)
+	receipt, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{ReviewBase: base, ReviewBaseSHA: baseSHA, ReviewHeadSHA: headSHA, Risk: model.ChangeRiskLow})
 	if err != nil {
 		t.Fatalf("identical findings failed review: %v\n%#v", err, receipt)
 	}
@@ -637,6 +671,7 @@ func TestSecretBearingReviewUsesTrustedConfigArgumentAndRequiresBase(t *testing.
 	base := t.TempDir()
 	trusted := t.TempDir()
 	t.Setenv("REVIEW_TOKEN", "review-secret")
+	writeFile(t, root, "source.txt", "base\n")
 	writeFile(t, root, "reviewer-output.schema.json", "target-controlled\n")
 	reviewer := filepath.Join(trusted, "reviewer")
 	writeExecutable(t, trusted, "reviewer", `#!/bin/sh
@@ -659,6 +694,7 @@ printf '{"review_complete":true,"findings":[{"role":"%s","severity":"P3","summar
 	if err := copyRepository(root, base, copyForReview); err != nil {
 		t.Fatal(err)
 	}
+	writeFile(t, root, "source.txt", "head\n")
 	trustedConfig := filepath.Join(trusted, "config.yaml")
 	writePipelineConfigAt(t, trustedConfig, cfg)
 	baseSHA := initializeTestGit(t, base)
@@ -793,6 +829,8 @@ func TestReviewBlocksP1MalformedOutputAndRepositoryMutation(t *testing.T) {
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			root := t.TempDir()
+			base := t.TempDir()
+			writeFile(t, root, "source.txt", "base\n")
 			writeExecutable(t, root, "review.sh", `#!/bin/sh
 cat >/dev/null
 if [ "$SAM_HARNESS_REVIEW_ROLE" = security ]; then
@@ -806,8 +844,14 @@ fi
 				cfg.Workflow.Reviewers[index].Command = []string{"./review.sh"}
 			}
 			writePipelineConfig(t, root, cfg)
+			if err := copyRepository(root, base, copyForReview); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, root, "source.txt", "head\n")
+			baseSHA := initializeTestGit(t, base)
+			headSHA := initializeTestGit(t, root)
 
-			receipt, _, err := Run(root, model.PhaseReview, false)
+			receipt, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{ReviewBase: base, ReviewBaseSHA: baseSHA, ReviewHeadSHA: headSHA})
 			if err == nil || !strings.Contains(err.Error(), scenario.errorMatch) {
 				t.Fatalf("review error = %v, receipt = %#v", err, receipt)
 			}
@@ -815,8 +859,9 @@ fi
 				t.Fatalf("unsafe review did not block: %#v", receipt)
 			}
 			if scenario.name == "mutation" {
-				if _, statErr := os.Stat(filepath.Join(root, "source.txt")); !os.IsNotExist(statErr) {
-					t.Fatalf("reviewer mutation escaped its isolated copy: %v", statErr)
+				content, readErr := os.ReadFile(filepath.Join(root, "source.txt"))
+				if readErr != nil || string(content) != "head\n" {
+					t.Fatalf("reviewer mutation escaped its isolated copy: content=%q err=%v", content, readErr)
 				}
 			}
 		})
