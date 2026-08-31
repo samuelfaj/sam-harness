@@ -74,6 +74,23 @@ func TestBuildPreservesExistingInstructions(t *testing.T) {
 	}
 }
 
+func TestManagedRootAgentsPinsCurrentHarnessVersion(t *testing.T) {
+	t.Parallel()
+	want := "This repository uses sam-harness " + model.HarnessVersion + " with the production profile."
+	operations := buildProductionOperations(t, t.TempDir())
+	generated := operationContent(t, operations, "AGENTS.md")
+	if !strings.Contains(generated, want) {
+		t.Fatalf("generated AGENTS.md is not pinned to the current harness version:\n%s", generated)
+	}
+	checkedIn, err := os.ReadFile(filepath.Join("..", "..", "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(checkedIn), want) {
+		t.Fatalf("checked-in AGENTS.md is not pinned to the current harness version:\n%s", checkedIn)
+	}
+}
+
 func TestCloneWorkflowPreservesTrustedConfigArgumentOwnership(t *testing.T) {
 	t.Parallel()
 	workflow := &model.WorkflowConfig{

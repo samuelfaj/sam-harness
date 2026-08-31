@@ -1081,11 +1081,33 @@ func verifyRepairPatch(path, expectedDigest string) error {
 }
 
 func verifyEvidencePatch(kind, path, expectedDigest string) error {
-	data, err := os.ReadFile(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return err
 	}
-	digest := sha256.Sum256(data)
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s patch must not be a symbolic link: %s", kind, path)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s patch must be a regular file: %s", kind, path)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		return fmt.Errorf("%s patch changed while it was opened: %s", kind, path)
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return err
+	}
+	digest := hash.Sum(nil)
 	current := hex.EncodeToString(digest[:])
 	if expectedDigest == "" || current != expectedDigest {
 		return fmt.Errorf("%s patch digest mismatch: receipt %s, current %s", kind, expectedDigest, current)
