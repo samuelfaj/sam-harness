@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -579,10 +580,13 @@ func TestReviewReceivesCanonicalBaseToHeadChangeEvidence(t *testing.T) {
 	writeFile(t, root, "source.txt", "base\n")
 	writeExecutable(t, root, "review.sh", fmt.Sprintf(`#!/bin/sh
 payload=$(cat)
+patch_path=$(printf '%%s' "$payload" | sed -n 's/.*"review_patch_path":"\([^"]*\)".*/\1/p')
+test -r "$patch_path"
+cat "$patch_path" > %q/"$SAM_HARNESS_REVIEW_ROLE.patch"
 printf '%%s' "$payload" > %q/"$SAM_HARNESS_REVIEW_ROLE.json"
 git diff --quiet HEAD -- && exit 51
 printf '{"review_complete":true,"findings":[{"role":"%%s","severity":"P3","summary":"change reviewed","evidence":"base-to-head","path":"source.txt","line":1,"required_change":"apply reviewed change","acceptance":"change is accepted"}]}\n' "$SAM_HARNESS_REVIEW_ROLE"
-`, promptDirectory))
+`, promptDirectory, promptDirectory))
 	cfg := testPipelineConfig()
 	for index := range cfg.Workflow.Reviewers {
 		cfg.Workflow.Reviewers[index].Command = []string{"./review.sh"}
@@ -617,7 +621,7 @@ printf '{"review_complete":true,"findings":[{"role":"%%s","severity":"P3","summa
 		BaseFingerprint string `json:"review_base_fingerprint"`
 		HeadSHA         string `json:"review_head_sha"`
 		HeadFingerprint string `json:"review_head_fingerprint"`
-		Patch           string `json:"review_patch"`
+		PatchPath       string `json:"review_patch_path"`
 		PatchSHA256     string `json:"review_patch_sha256"`
 	}
 	promptData, err := os.ReadFile(filepath.Join(promptDirectory, string(model.ReviewerArchitecture)+".json"))
@@ -627,8 +631,233 @@ printf '{"review_complete":true,"findings":[{"role":"%%s","severity":"P3","summa
 	if err := json.Unmarshal(promptData, &prompt); err != nil {
 		t.Fatal(err)
 	}
-	if prompt.BaseRoot != receipt.ReviewBaseRoot || prompt.BaseSHA != receipt.ReviewBaseSHA || prompt.BaseFingerprint != receipt.ReviewBaseFingerprint || prompt.HeadSHA != receipt.ReviewHeadSHA || prompt.HeadFingerprint != receipt.ReviewHeadFingerprint || prompt.Patch != string(patch) || prompt.PatchSHA256 != receipt.ReviewPatchSHA256 {
+	if prompt.BaseRoot != receipt.ReviewBaseRoot || prompt.BaseSHA != receipt.ReviewBaseSHA || prompt.BaseFingerprint != receipt.ReviewBaseFingerprint || prompt.HeadSHA != receipt.ReviewHeadSHA || prompt.HeadFingerprint != receipt.ReviewHeadFingerprint || prompt.PatchPath == "" || !filepath.IsAbs(prompt.PatchPath) || prompt.PatchSHA256 != receipt.ReviewPatchSHA256 {
 		t.Fatalf("review prompt lineage differs from receipt: prompt=%#v receipt=%#v", prompt, receipt)
+	}
+	reviewerPatch, err := os.ReadFile(filepath.Join(promptDirectory, string(model.ReviewerArchitecture)+".patch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(reviewerPatch, patch) {
+		t.Fatal("reviewer did not read the exact canonical patch through review_patch_path")
+	}
+	var promptFields map[string]json.RawMessage
+	if err := json.Unmarshal(promptData, &promptFields); err != nil {
+		t.Fatal(err)
+	}
+	if _, embedded := promptFields["review_patch"]; embedded {
+		t.Fatal("review prompt embedded the canonical patch body")
+	}
+}
+
+func TestReviewLargePatchUsesBoundedPointerTransport(t *testing.T) {
+	root := t.TempDir()
+	base := t.TempDir()
+	promptDirectory := t.TempDir()
+	largeContent := "large-review-patch-marker\n" + strings.Repeat("x", 40*1024) + "\n"
+	writeFile(t, root, "source.txt", "base\n")
+	writeExecutable(t, root, "review.sh", fmt.Sprintf(`#!/bin/sh
+payload=$(cat)
+patch_path=$(printf '%%s' "$payload" | sed -n 's/.*"review_patch_path":"\([^"]*\)".*/\1/p')
+test -r "$patch_path"
+cat "$patch_path" > %q/"$SAM_HARNESS_REVIEW_ROLE.patch"
+printf '%%s' "$payload" > %q/"$SAM_HARNESS_REVIEW_ROLE.json"
+printf '{"review_complete":true,"findings":[]}\n'
+`, promptDirectory, promptDirectory))
+	cfg := testPipelineConfig()
+	for index := range cfg.Workflow.Reviewers {
+		cfg.Workflow.Reviewers[index].Command = []string{"./review.sh"}
+	}
+	writePipelineConfig(t, root, cfg)
+	if err := copyRepository(root, base, copyForReview); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "source.txt", largeContent)
+	baseSHA := initializeTestGit(t, base)
+	headSHA := initializeTestGit(t, root)
+
+	receipt, _, err := RunWithOptions(root, model.PhaseReview, false, RunOptions{ReviewBase: base, ReviewBaseSHA: baseSHA, ReviewHeadSHA: headSHA})
+	if err != nil {
+		t.Fatalf("large patch review failed: %v\n%#v", err, receipt)
+	}
+	patch, err := os.ReadFile(receipt.ReviewPatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(patch) <= outputLimit {
+		t.Fatalf("test patch is not greater than %d bytes: %d", outputLimit, len(patch))
+	}
+	patchDigest := sha256.Sum256(patch)
+	if receipt.ReviewPatchSHA256 != hex.EncodeToString(patchDigest[:]) {
+		t.Fatalf("receipt patch digest = %q, want %x", receipt.ReviewPatchSHA256, patchDigest)
+	}
+
+	promptData, err := os.ReadFile(filepath.Join(promptDirectory, string(model.ReviewerArchitecture)+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(promptData) >= outputLimit {
+		t.Fatalf("review prompt is not bounded below %d bytes: %d", outputLimit, len(promptData))
+	}
+	if bytes.Contains(promptData, []byte(largeContent)) || bytes.Contains(promptData, []byte("large-review-patch-marker")) {
+		t.Fatal("large canonical patch body was embedded in the reviewer prompt")
+	}
+	var prompt struct {
+		PatchPath   string `json:"review_patch_path"`
+		PatchSHA256 string `json:"review_patch_sha256"`
+	}
+	if err := json.Unmarshal(promptData, &prompt); err != nil {
+		t.Fatal(err)
+	}
+	if prompt.PatchPath == "" || prompt.PatchSHA256 != receipt.ReviewPatchSHA256 {
+		t.Fatalf("large patch prompt pointer = %#v, receipt = %#v", prompt, receipt)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(promptData, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, embedded := fields["review_patch"]; embedded {
+		t.Fatal("large patch prompt contains review_patch body field")
+	}
+	reviewerPatch, err := os.ReadFile(filepath.Join(promptDirectory, string(model.ReviewerArchitecture)+".patch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(reviewerPatch, patch) {
+		t.Fatal("reviewer-readable patch differs from the receipt artifact")
+	}
+	reviewerDigest := sha256.Sum256(reviewerPatch)
+	if prompt.PatchSHA256 != hex.EncodeToString(reviewerDigest[:]) {
+		t.Fatalf("reviewer-readable patch digest = %x, prompt = %q", reviewerDigest, prompt.PatchSHA256)
+	}
+}
+
+func TestMaterializeReviewPatchUsesCanonicalBytesAndExclusiveDestination(t *testing.T) {
+	sandbox := t.TempDir()
+	canonical := []byte("canonical patch bytes\n")
+	digest := sha256.Sum256(canonical)
+	expectedDigest := hex.EncodeToString(digest[:])
+	external := filepath.Join(t.TempDir(), "outside.patch")
+	if err := os.WriteFile(external, []byte("outside bytes\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sandboxRoot, err := openReviewSandboxRoot(sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sandboxRoot.Close()
+
+	path, err := materializeReviewPatch(sandboxRoot, canonical, expectedDigest)
+	if err != nil {
+		t.Fatalf("materializeReviewPatch() failed: %v", err)
+	}
+	if path != reviewerPatchPath(sandbox) || filepath.Dir(path) != sandbox {
+		t.Fatalf("review patch was not placed at the fixed sandbox location: %q", path)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, canonical) {
+		t.Fatalf("materialized patch = %q, want %q", got, canonical)
+	}
+	if err := os.WriteFile(external, []byte("substituted source bytes\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, canonical) {
+		t.Fatalf("materialized patch changed after source substitution: %q", got)
+	}
+	if err := removeReviewSandboxPatch(sandboxRoot); err != nil {
+		t.Fatal(err)
+	}
+
+	outsideOriginal := "outside-original\n"
+	if err := os.WriteFile(external, []byte(outsideOriginal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := materializeReviewPatch(sandboxRoot, canonical, expectedDigest); err == nil {
+		t.Fatal("existing destination symlink was overwritten")
+	}
+	if got := readFile(t, external); got != outsideOriginal {
+		t.Fatalf("destination substitution changed the outside target: %q", got)
+	}
+	if err := removeReviewSandboxPatch(sandboxRoot); err != nil {
+		t.Fatal(err)
+	}
+
+	path, err = materializeReviewPatch(sandboxRoot, canonical, expectedDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := removeReviewSandboxPatch(sandboxRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyReviewSandboxPatch(sandboxRoot, expectedDigest); err == nil {
+		t.Fatal("substituted destination symlink was accepted")
+	}
+	if got := readFile(t, external); got != outsideOriginal {
+		t.Fatalf("verify after destination substitution changed the outside target: %q", got)
+	}
+}
+
+func TestReviewSandboxRootRejectsParentSwapAndCleansHeldDescriptor(t *testing.T) {
+	parent := t.TempDir()
+	sandbox := filepath.Join(parent, "sandbox")
+	if err := os.Mkdir(sandbox, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sandboxRoot, err := openReviewSandboxRoot(sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sandboxRoot.Close()
+
+	moved := filepath.Join(parent, "sandbox-moved")
+	if err := os.Rename(sandbox, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(sandbox, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := sandboxRoot.confirmIdentity(); err == nil {
+		t.Fatal("parent swap was accepted by sandbox identity confirmation")
+	}
+
+	canonical := []byte("parent swap patch\n")
+	digest := sha256.Sum256(canonical)
+	if _, err := materializeReviewPatch(sandboxRoot, canonical, hex.EncodeToString(digest[:])); err == nil {
+		t.Fatal("parent swap was accepted for review patch materialization")
+	}
+	if _, err := os.Lstat(filepath.Join(sandbox, ".sam-harness-"+reviewerPatchFilename)); !os.IsNotExist(err) {
+		t.Fatalf("attacker directory received a review patch: %v", err)
+	}
+
+	file, err := sandboxRoot.root.OpenFile(".sam-harness-"+reviewerPatchFilename, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o400)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write(canonical); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeReviewSandboxPatch(sandboxRoot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(moved, ".sam-harness-"+reviewerPatchFilename)); !os.IsNotExist(err) {
+		t.Fatalf("held descriptor patch was not cleaned from renamed sandbox: %v", err)
 	}
 }
 

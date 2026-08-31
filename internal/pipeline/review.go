@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,67 @@ type reviewChangeEvidence struct {
 	patchSHA256     string
 	baseSnapshot    map[string]fileState
 	headSnapshot    map[string]fileState
+}
+
+const reviewerPatchFilename = "review.patch"
+
+type reviewSandboxRoot struct {
+	path     string
+	root     *os.Root
+	identity os.FileInfo
+}
+
+func openReviewSandboxRoot(path string) (*reviewSandboxRoot, error) {
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("review sandbox path must be absolute: %q", path)
+	}
+	identity, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("inspect review sandbox: %w", err)
+	}
+	if identity.Mode()&os.ModeSymlink != 0 || !identity.IsDir() {
+		return nil, errors.New("review sandbox must be a non-symlink directory")
+	}
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return nil, fmt.Errorf("open review sandbox root: %w", err)
+	}
+	sandbox := &reviewSandboxRoot{path: path, root: root, identity: identity}
+	if err := sandbox.confirmIdentity(); err != nil {
+		_ = root.Close()
+		return nil, err
+	}
+	return sandbox, nil
+}
+
+func (sandbox *reviewSandboxRoot) confirmIdentity() error {
+	if sandbox == nil || sandbox.root == nil {
+		return errors.New("review sandbox root is unavailable")
+	}
+	rootInfo, err := sandbox.root.Stat(".")
+	if err != nil {
+		return fmt.Errorf("inspect held review sandbox root: %w", err)
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() || !os.SameFile(sandbox.identity, rootInfo) {
+		return errors.New("held review sandbox root identity changed")
+	}
+	textInfo, err := os.Lstat(sandbox.path)
+	if err != nil {
+		return fmt.Errorf("inspect review sandbox path: %w", err)
+	}
+	if textInfo.Mode()&os.ModeSymlink != 0 || !textInfo.IsDir() || !os.SameFile(sandbox.identity, textInfo) {
+		return errors.New("review sandbox path identity changed")
+	}
+	return nil
+}
+
+func (sandbox *reviewSandboxRoot) Close() error {
+	if sandbox == nil || sandbox.root == nil {
+		return nil
+	}
+	root := sandbox.root
+	sandbox.root = nil
+	return root.Close()
 }
 
 func prepareReviewChange(root string, cfg model.Config, requestedBase, expectedBaseSHA, expectedHeadSHA string, receipt *Receipt) (reviewChangeEvidence, error) {
@@ -87,6 +149,134 @@ func prepareReviewChange(root string, cfg model.Config, requestedBase, expectedB
 	receipt.ReviewPatch = patchPath
 	receipt.ReviewPatchSHA256 = change.patchSHA256
 	return change, nil
+}
+
+func materializeReviewPatch(sandbox *reviewSandboxRoot, patch []byte, expectedDigest string) (destination string, err error) {
+	if sandbox == nil || sandbox.root == nil {
+		return "", errors.New("review sandbox root is unavailable")
+	}
+	if err := sandbox.confirmIdentity(); err != nil {
+		return "", err
+	}
+	patchDigest := sha256.Sum256(patch)
+	actualDigest := hex.EncodeToString(patchDigest[:])
+	if expectedDigest == "" || actualDigest != expectedDigest {
+		return "", fmt.Errorf("review patch bytes digest mismatch: expected %s, current %s", expectedDigest, actualDigest)
+	}
+
+	const name = ".sam-harness-" + reviewerPatchFilename
+	destination = reviewerPatchPath(sandbox.path)
+	file, err := sandbox.root.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o400)
+	if err != nil {
+		return "", fmt.Errorf("create exclusive review patch: %w", err)
+	}
+	removeDestination := true
+	defer func() {
+		if closeErr := file.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("close review patch: %w", closeErr)
+		}
+		if removeDestination || err != nil {
+			if removeErr := sandbox.root.RemoveAll(name); err == nil && !os.IsNotExist(removeErr) && removeErr != nil {
+				err = fmt.Errorf("remove review patch after failure: %w", removeErr)
+			}
+		}
+	}()
+
+	if _, err := file.Write(patch); err != nil {
+		return "", fmt.Errorf("write review patch: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		return "", fmt.Errorf("sync review patch: %w", err)
+	}
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stat open review patch: %w", err)
+	}
+	if !openedInfo.Mode().IsRegular() {
+		return "", errors.New("open review patch must be a regular file")
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", fmt.Errorf("rewind review patch: %w", err)
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", fmt.Errorf("hash open review patch: %w", err)
+	}
+	if current := hex.EncodeToString(hash.Sum(nil)); current != expectedDigest {
+		return "", fmt.Errorf("review patch digest changed while it was written: expected %s, current %s", expectedDigest, current)
+	}
+	pathInfo, err := sandbox.root.Lstat(name)
+	if err != nil {
+		return "", fmt.Errorf("inspect created review patch: %w", err)
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 || !pathInfo.Mode().IsRegular() || !os.SameFile(openedInfo, pathInfo) {
+		return "", errors.New("review patch changed while it was written")
+	}
+	if err := sandbox.confirmIdentity(); err != nil {
+		return "", err
+	}
+	removeDestination = false
+	return destination, nil
+}
+
+func reviewerPatchPath(sandbox string) string {
+	return filepath.Join(sandbox, ".sam-harness-"+reviewerPatchFilename)
+}
+
+func verifyReviewSandboxPatch(sandbox *reviewSandboxRoot, expectedDigest string) error {
+	if sandbox == nil || sandbox.root == nil {
+		return errors.New("review sandbox root is unavailable")
+	}
+	if err := sandbox.confirmIdentity(); err != nil {
+		return err
+	}
+	const name = ".sam-harness-" + reviewerPatchFilename
+	info, err := sandbox.root.Lstat(name)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return errors.New("review sandbox patch must be a regular file")
+	}
+	file, err := sandbox.root.Open(name)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		return errors.New("review sandbox patch changed while it was opened")
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return err
+	}
+	current := hex.EncodeToString(hash.Sum(nil))
+	if expectedDigest == "" || current != expectedDigest {
+		return fmt.Errorf("review sandbox patch digest mismatch: expected %s, current %s", expectedDigest, current)
+	}
+	finalInfo, err := sandbox.root.Lstat(name)
+	if err != nil {
+		return err
+	}
+	if finalInfo.Mode()&os.ModeSymlink != 0 || !finalInfo.Mode().IsRegular() || !os.SameFile(opened, finalInfo) {
+		return errors.New("review sandbox patch changed while it was verified")
+	}
+	return sandbox.confirmIdentity()
+}
+
+func removeReviewSandboxPatch(sandbox *reviewSandboxRoot) error {
+	if sandbox == nil || sandbox.root == nil {
+		return errors.New("review sandbox root is unavailable")
+	}
+	const name = ".sam-harness-" + reviewerPatchFilename
+	if err := sandbox.root.RemoveAll(name); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func normalizeReviewIdentities(reviewBase, baseSHA, headSHA string) (string, string, error) {

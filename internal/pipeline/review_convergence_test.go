@@ -326,6 +326,103 @@ func TestReceiptHTMLEscapesUntrustedFindingValues(t *testing.T) {
 	}
 }
 
+func TestReviewReceiptHTMLDistinguishesIncompleteExecutionFromClean(t *testing.T) {
+	errorText := "review blocked: <script>alert(1)</script>"
+	output := "reviewer output: <bad>\n" + strings.Repeat("x", receiptHTMLCommandOutputLimit+100) + "\noutput-after-limit"
+	receipt := Receipt{
+		HarnessVersion: model.HarnessVersion,
+		Kind:           "pipeline",
+		Phase:          model.PhaseReview,
+		Status:         StatusBlocked,
+		Error:          errorText,
+		Commands: []CommandResult{
+			{Name: "review:security", Phase: model.PhaseReview, Required: true, ExitCode: 1, Output: output},
+			{Name: "review:correctness", Phase: model.PhaseReview, Required: true, ExitCode: -1, TimedOut: true},
+			{Name: "review:simplicity", Phase: model.PhaseReview, Required: true, Passed: true, ExitCode: 0},
+			{Name: "static-check", Phase: model.PhaseStatic, Required: true, ExitCode: 1},
+		},
+	}
+	html, err := receiptHTML(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		`class="alert bad"`,
+		"Receipt error / block reason",
+		"review blocked: &lt;script&gt;alert(1)&lt;/script&gt;",
+		"Review execution failures",
+		"security",
+		"review:security",
+		">1<",
+		">true<",
+		"timed_out",
+		"review:correctness",
+		"Fix every failed required reviewer command listed above and rerun the review; no approval or complete correction manifest exists yet.",
+		"INCOMPLETE REVIEW — no approval or complete correction manifest exists. Resolve the block and rerun the review.",
+		"reviewer output: &lt;bad&gt;",
+		"[output excerpt truncated by sam-harness: ",
+		"output-after-limit",
+		"bytes omitted]",
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("incomplete review HTML omitted %q:\n%s", required, html)
+		}
+	}
+	for _, forbidden := range []string{"<script>alert(1)</script>", "<bad>", "No findings were recorded.", "CLEAN — no findings were recorded."} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("incomplete review HTML contains misleading or unescaped value %q", forbidden)
+		}
+	}
+	excerpt := receiptHTMLCommandOutput(output)
+	if len(excerpt) > receiptHTMLCommandOutputLimit || !strings.Contains(excerpt, "reviewer output: <bad>") || !strings.Contains(excerpt, "output-after-limit") || !strings.Contains(excerpt, "bytes omitted]") {
+		t.Fatalf("reviewer output excerpt did not preserve bounded head and tail: %q", excerpt)
+	}
+
+	clean, err := receiptHTML(Receipt{HarnessVersion: model.HarnessVersion, Kind: "pipeline", Phase: model.PhaseReview, Status: StatusPassed, Passed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(clean, "CLEAN — no findings were recorded.") || strings.Contains(clean, "INCOMPLETE REVIEW") || strings.Contains(clean, "Review execution failures") {
+		t.Fatalf("clean review HTML is not distinct: %s", clean)
+	}
+}
+
+func TestAggregateReceiptHTMLDoesNotCallFailedReviewClean(t *testing.T) {
+	receipt := Receipt{
+		HarnessVersion: model.HarnessVersion,
+		Kind:           "pipeline",
+		Phase:          model.PhaseAll,
+		Status:         StatusFailed,
+		Error:          "review phase failed: required reviewer exited unsuccessfully",
+		Commands: []CommandResult{
+			{Name: "review:security", Phase: model.PhaseReview, Required: true, ExitCode: 1, Output: "reviewer failed"},
+		},
+		Phases: []PhaseResult{{Phase: model.PhaseReview, Status: StatusFailed, Error: "required reviewer exited unsuccessfully"}},
+	}
+	html, err := receiptHTML(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"Receipt error / block reason",
+		"review phase failed: required reviewer exited unsuccessfully",
+		"Review execution failures",
+		"review:security",
+		"Fix every failed required reviewer command listed above and rerun the review",
+		"INCOMPLETE REVIEW — no approval or complete correction manifest exists",
+		"Review is incomplete.",
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("aggregate incomplete review HTML omitted %q:\n%s", required, html)
+		}
+	}
+	for _, forbidden := range []string{"No findings were recorded.", "CLEAN — no findings were recorded."} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("aggregate incomplete review HTML contains misleading value %q", forbidden)
+		}
+	}
+}
+
 func TestRepairReceiptWritesHTMLSidecarWithPatchIdentity(t *testing.T) {
 	root := t.TempDir()
 	cfg := testPipelineConfig()
