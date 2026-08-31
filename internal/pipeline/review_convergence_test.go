@@ -149,18 +149,35 @@ func TestReviewConvergenceRejectsForgedOrWrongRoleFrozenID(t *testing.T) {
 	prior := convergenceTestReceipt(t, t.TempDir(), strings.Repeat("c", 40), convergenceTestFinding(model.ReviewerSecurity, "P1", "changed.go", 2))
 	actionID := prior.RepairManifest.Actions[0].ID
 	for name, scenario := range map[string]struct {
-		id   string
-		role model.ReviewerRole
+		id         string
+		role       model.ReviewerRole
+		errorMatch string
 	}{
-		"forged":     {id: strings.Repeat("f", 64), role: model.ReviewerSecurity},
-		"wrong role": {id: actionID, role: model.ReviewerCorrectness},
+		"forged":          {id: strings.Repeat("f", 64), role: model.ReviewerSecurity, errorMatch: "not a frozen action"},
+		"wrong role":      {id: actionID, role: model.ReviewerCorrectness, errorMatch: "not a frozen action"},
+		"padded":          {id: " " + actionID + " ", role: model.ReviewerSecurity, errorMatch: "not canonical"},
+		"whitespace-only": {id: "   ", role: model.ReviewerSecurity, errorMatch: "not canonical"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			current := Receipt{Findings: []Finding{{ID: scenario.id, Role: scenario.role, Severity: "P1", Summary: "still unsafe", Evidence: "changed.go", Path: "changed.go", Line: 3, RequiredChange: "correct it", Acceptance: "it is safe"}}}
-			if err := classifyReviewConvergence(t.TempDir(), prior, &current); err == nil {
-				t.Fatal("forged or wrong-role frozen ID was accepted")
+			if err := classifyReviewConvergence(t.TempDir(), prior, &current); err == nil || !strings.Contains(err.Error(), scenario.errorMatch) {
+				t.Fatalf("invalid frozen ID error = %v, want %q", err, scenario.errorMatch)
 			}
 		})
+	}
+}
+
+func TestReviewConvergenceRequiresExplicitIDForFrozenActionCollision(t *testing.T) {
+	prior := convergenceTestReceipt(t, t.TempDir(), strings.Repeat("c", 40), convergenceTestFinding(model.ReviewerSecurity, "P1", "changed.go", 2))
+	finding := prior.RepairManifest.Actions[0]
+	finding.ID = ""
+	finding.Status = ""
+	finding.Lineage = ""
+	current := Receipt{Findings: []Finding{finding}}
+
+	err := classifyReviewConvergence(t.TempDir(), prior, &current)
+	if err == nil || !strings.Contains(err.Error(), "did not return its explicit exact manifest ID") {
+		t.Fatalf("implicit frozen ID collision error = %v", err)
 	}
 }
 
@@ -387,6 +404,38 @@ func TestReviewReceiptHTMLDistinguishesIncompleteExecutionFromClean(t *testing.T
 	}
 }
 
+func TestReviewReceiptHTMLPreservesSchemaBlockDiagnostics(t *testing.T) {
+	const blockReason = "review blocked: required reviewer output is invalid"
+	receipt := Receipt{
+		HarnessVersion: model.HarnessVersion,
+		Kind:           "pipeline",
+		Phase:          model.PhaseReview,
+		Status:         StatusBlocked,
+		Error:          blockReason,
+		Commands: []CommandResult{{
+			Name:     "review:security",
+			Phase:    model.PhaseReview,
+			Required: true,
+			ExitCode: 1,
+			Output:   "invalid_json_schema\nMissing 'id'",
+		}},
+	}
+	html, err := receiptHTML(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{blockReason, "invalid_json_schema", "Missing &#39;id&#39;", "INCOMPLETE REVIEW"} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("schema-blocked review HTML omitted %q:\n%s", required, html)
+		}
+	}
+	for _, forbidden := range []string{"No findings were recorded.", "CLEAN — no findings were recorded."} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("schema-blocked review HTML contains misleading value %q", forbidden)
+		}
+	}
+}
+
 func TestAggregateReceiptHTMLDoesNotCallFailedReviewClean(t *testing.T) {
 	receipt := Receipt{
 		HarnessVersion: model.HarnessVersion,
@@ -409,8 +458,7 @@ func TestAggregateReceiptHTMLDoesNotCallFailedReviewClean(t *testing.T) {
 		"Review execution failures",
 		"review:security",
 		"Fix every failed required reviewer command listed above and rerun the review",
-		"INCOMPLETE REVIEW — no approval or complete correction manifest exists",
-		"Review is incomplete.",
+		"INCOMPLETE REVIEW — no approval or complete correction manifest exists.",
 	} {
 		if !strings.Contains(html, required) {
 			t.Fatalf("aggregate incomplete review HTML omitted %q:\n%s", required, html)

@@ -181,14 +181,20 @@ func classifyReviewConvergence(root string, prior Receipt, receipt *Receipt) err
 	currentIDs := make(map[string]bool, len(receipt.Findings))
 	for index := range receipt.Findings {
 		finding := &receipt.Findings[index]
-		explicitID := strings.TrimSpace(finding.ID)
+		explicitID := finding.ID
 		if explicitID != "" {
+			if explicitID != strings.TrimSpace(explicitID) {
+				return fmt.Errorf("review finding id %q is not canonical; IDs must not contain surrounding whitespace", explicitID)
+			}
 			frozenAction, exists := frozen[explicitID]
 			if !exists || frozenAction.Role != finding.Role {
 				return fmt.Errorf("review finding %q is not a frozen action for reviewer role %q", explicitID, finding.Role)
 			}
 		} else {
 			finding.ID = findingIdentity(*finding)
+			if frozen[finding.ID].ID != "" {
+				return fmt.Errorf("review finding %q matches a frozen action but did not return its explicit exact manifest ID", finding.ID)
+			}
 		}
 		currentIDs[finding.ID] = true
 		if frozen[finding.ID].ID != "" {
@@ -209,14 +215,36 @@ func classifyReviewConvergence(root string, prior Receipt, receipt *Receipt) err
 		}
 		finding.Status = findingStatusRecorded
 	}
-	for id := range frozen {
-		if !currentIDs[id] {
-			receipt.ResolvedFindingIDs = append(receipt.ResolvedFindingIDs, id)
+	failedRoles := make(map[model.ReviewerRole]bool)
+	for _, command := range receipt.Commands {
+		if command.Phase != model.PhaseReview || command.Passed || !strings.HasPrefix(command.Name, "review:") {
+			continue
 		}
+		role := model.ReviewerRole(strings.TrimPrefix(command.Name, "review:"))
+		if role.Valid() {
+			failedRoles[role] = true
+		}
+	}
+	for _, action := range prior.RepairManifest.Actions {
+		if currentIDs[action.ID] {
+			continue
+		}
+		if failedRoles[action.Role] {
+			action.Status = findingStatusUnresolved
+			action.Lineage = prior.RepairManifest.LineageSHA256
+			receipt.Findings = append(receipt.Findings, action)
+			receipt.UnresolvedFindingIDs = append(receipt.UnresolvedFindingIDs, action.ID)
+			continue
+		}
+		receipt.ResolvedFindingIDs = append(receipt.ResolvedFindingIDs, action.ID)
 	}
 	receipt.ResolvedFindingIDs = sortedUnique(receipt.ResolvedFindingIDs)
 	receipt.UnresolvedFindingIDs = sortedUnique(receipt.UnresolvedFindingIDs)
 	receipt.RegressionFindingIDs = sortedUnique(receipt.RegressionFindingIDs)
+	if len(failedRoles) > 0 {
+		receipt.ReviewConvergence = reviewConvergenceBlocked
+		return errors.New("review blocked by incomplete reviewer execution")
+	}
 	if len(receipt.UnresolvedFindingIDs) > 0 || len(receipt.RegressionFindingIDs) > 0 {
 		receipt.ReviewConvergence = reviewConvergenceBlocked
 		return errors.New("review blocked by unresolved frozen action or introduced P0/P1 regression")
