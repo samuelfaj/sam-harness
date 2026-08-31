@@ -27,8 +27,23 @@ func TestBuildGeneratesExhaustiveReviewerOutputSchema(t *testing.T) {
 	if err := json.Unmarshal([]byte(content), &schema); err != nil {
 		t.Fatalf("reviewer output schema is not JSON: %v", err)
 	}
-	if content != string(harnessschema.ReviewerOutputJSON) {
-		t.Fatalf("generated reviewer schema differs from canonical schema:\n%s", content)
+	if content == string(harnessschema.ReviewerOutputJSON) || !strings.Contains(content, `"id": {`) {
+		t.Fatalf("generated reviewer schema does not add the optional convergence id:\n%s", content)
+	}
+	var generatedFindings map[string]any
+	if err := json.Unmarshal([]byte(content), &generatedFindings); err != nil {
+		t.Fatal(err)
+	}
+	generatedProperties := generatedFindings["properties"].(map[string]any)
+	findingsProperties := generatedProperties["findings"].(map[string]any)
+	itemProperties := findingsProperties["items"].(map[string]any)["properties"].(map[string]any)
+	if _, ok := itemProperties["id"]; !ok {
+		t.Fatal("generated reviewer schema omitted optional finding id")
+	}
+	for _, required := range findingsProperties["items"].(map[string]any)["required"].([]any) {
+		if required == "id" {
+			t.Fatal("finding id must remain optional for initial reviews")
+		}
 	}
 	checkedIn, err := os.ReadFile(filepath.Join("..", "..", ".sam-harness", "reviewer-output.schema.json"))
 	if err != nil {
@@ -612,6 +627,7 @@ func TestBuildPreMergeReviewUsesProtectedTrustedControlPlane(t *testing.T) {
 		`--review-base "${GITHUB_WORKSPACE}/trusted-control"`,
 		"--review-base-sha",
 		"--review-head-sha",
+		"fetch-depth: 0",
 		"go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v" + model.HarnessVersion,
 		`test -n "${REVIEW_ENV:-}"`,
 		"review_patch_sha256",
@@ -709,7 +725,7 @@ func TestBuildSeparatesRepairSecretsFromUntrustedPhaseJobs(t *testing.T) {
 		t.Fatalf("trusted review repair can recursively repair its own branch:\n%s", reviewRepair)
 	}
 	resolve := contentSection(t, agents, "  resolve:\n", "  start_review_check:\n")
-	for _, expected := range []string{`head_ref="$(printf '%s' "$pull" | jq -r '.head.ref')"`, `head_ref=%s\n' "$head_sha" "$base_sha" "$pr_number" "$SOURCE_RUN_ID" "$head_ref"`} {
+	for _, expected := range []string{`head_ref="$(printf '%s' "$pull" | jq -r '.head.ref')"`, `head_ref=%s\nprior_review_run_id=%s\n' "$head_sha" "$base_sha" "$pr_number" "$SOURCE_RUN_ID" "$head_ref" "$prior_review_run_id"`} {
 		if !strings.Contains(resolve, expected) {
 			t.Fatalf("trusted resolver does not publish the provider-owned pull-request branch %q:\n%s", expected, resolve)
 		}
@@ -719,6 +735,54 @@ func TestBuildSeparatesRepairSecretsFromUntrustedPhaseJobs(t *testing.T) {
 	for _, forbidden := range []string{"REPAIR_ENV", "REPAIR_API_KEY", "sam-harness-repair-static:", "sam-harness-publish-repair:"} {
 		if strings.Contains(gitlab, forbidden) {
 			t.Fatalf("GitLab MR YAML contains secret-bound repair control %q:\n%s", forbidden, gitlab)
+		}
+	}
+}
+
+func TestBuildGitLabRepairReviewTransportsFrozenReceiptAndHTMLSidecar(t *testing.T) {
+	t.Parallel()
+	approved := productionAnswers()
+	approved.CISecretBindings = nil
+	approved.CISecretWaivers = map[string]string{"github": "agents need no provider secret", "gitlab": "agents need no provider secret"}
+	delete(approved.AgentControlPlanes, "gitlab")
+	content := operationContent(t, buildProductionOperationsWithAnswers(t, t.TempDir(), approved), ".sam-harness/ci/gitlab.yml")
+	var document any
+	if err := yaml.Unmarshal([]byte(content), &document); err != nil {
+		t.Fatalf("generated credential-free GitLab workflow is not YAML: %v\n%s", err, content)
+	}
+	review := contentSection(t, content, "sam-harness-review:\n", "sam-harness-artifact:\n")
+	for _, expected := range []string{
+		`"$CI_PROJECT_DIR/.sam-harness/evidence/prior-review"`,
+		"repair-branch re-review requires exactly one frozen prior review receipt",
+		`--review-base-sha "$SAM_HARNESS_REVIEW_BASE_SHA"`,
+		`--review-head-sha "$CI_COMMIT_SHA"`,
+		`--prior-review-receipt "$SAM_HARNESS_PRIOR_REVIEW_RECEIPT"`,
+	} {
+		if !strings.Contains(review, expected) {
+			t.Fatalf("GitLab convergence review is missing %q:\n%s", expected, review)
+		}
+	}
+	repair := contentSection(t, content, "sam-harness-repair-review:\n", "sam-harness-repair-artifact:\n")
+	for _, expected := range []string{
+		`repair_html="${repair_receipt%.json}.html"`,
+		`test -f "$repair_html"`,
+		`cp -p "$repair_patch" "$repair_receipt" "$repair_html" "$artifact_dir/"`,
+		`cp -p "$receipt" "$artifact_dir/prior-review/"`,
+	} {
+		if !strings.Contains(repair, expected) {
+			t.Fatalf("GitLab review repair artifact is missing %q:\n%s", expected, repair)
+		}
+	}
+	publisher := contentSection(t, content, "sam-harness-publish-repair:\n", "sam-harness-staging:\n")
+	for _, expected := range []string{
+		`html_count="$(find .sam-harness/evidence/repair-artifacts -type f -name '*-repair.html'`,
+		`test "$html_count" -eq 1`,
+		`test "$prior_review_count" -eq 1`,
+		`branch='sam-harness/repair-'"${CI_PIPELINE_ID}-${CI_JOB_ID}-${repair_phase}"`,
+		`git add -f .sam-harness/evidence/prior-review/"$(basename "$prior_review_receipt")"`,
+	} {
+		if !strings.Contains(publisher, expected) {
+			t.Fatalf("GitLab repair publisher is missing %q:\n%s", expected, publisher)
 		}
 	}
 }
@@ -795,6 +859,13 @@ func TestBuildMixedAgentBindingsPreserveCorrectionWithoutDanglingJobs(t *testing
 		github := operationContent(t, operations, ".github/workflows/sam-harness.yml")
 		if !strings.Contains(github, "  review:\n") || strings.Contains(github, "  repair_") || strings.Contains(github, "REPAIR_API_KEY") {
 			t.Fatalf("ordinary GitHub workflow did not keep review credential-free and repair external:\n%s", github)
+		}
+		for _, expected := range []string{
+			"persist-credentials: false\n          ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}\n          path: target\n          fetch-depth: 0",
+		} {
+			if !strings.Contains(github, expected) {
+				t.Fatalf("credential-free GitHub target checkout is missing %q:\n%s", expected, github)
+			}
 		}
 		agents := operationContent(t, operations, ".github/workflows/sam-harness-agents.yml")
 		for _, expected := range []string{"  workflow_run:\n", "  repair_failed_phase:\n", "for phase in static test review artifact", "REPAIR_ENV: ${{ secrets.REPAIR_API_KEY }}"} {

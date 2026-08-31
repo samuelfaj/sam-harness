@@ -3,6 +3,7 @@ package render
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -712,6 +713,9 @@ func localSkillDocument(lifecycle string) string {
 		"repair":    "1. Require the exact failed receipt, enabled correction configuration, `filesystem_sandboxed: true`, and, for provider-secret CI, `trusted_external_command: true`. A failed review must carry an intact, conflict-free repair manifest. `trusted_config_arguments` may name only safe helper paths resolved from the trusted config directory. Sam-harness does not OS-sandbox arbitrary argv.\n2. Independently verify and apply every manifest action in one coherent correction inside the sandboxed local workspace; do not stop after the first item or defer known work. Keep provider credentials and remote authority read-only.\n3. Enforce maximum attempts and cumulative changed-file and changed-line budgets against the frozen baseline; rerun static and test after every attempt. Automatic review repair is limited to one pass; the repair branch is re-reviewed but cannot spawn another automatic repair branch.\n4. Emit the runtime-created correction-only patch and receipt artifacts. Only a separate trusted publisher may apply that patch, disable hooks, push an isolated prefixed branch, or open a change request when explicitly authorized. Independent re-review remains required.",
 		"release":   "1. Require a reviewed commit, passing required CI, immutable artifact digest, SBOM, and provenance from one run.\n2. Promote the same path and digest to staging and production; never rebuild during promotion.\n3. Use provider-side protected production approval and read it back before claiming it.\n4. Observe technical and business checks for the configured window; use the explicit rollback command when its boundary is approved.",
 	}[lifecycle]
+	if lifecycle == "review" {
+		steps += "\n5. Every initial finding must identify a current added or modified line in base..head, or line 0 only for deletion-only, deleted, or pure-rename file-level evidence. For convergence, pass --prior-review-receipt, preserve frozen IDs only for the same reviewer role, and apply the same scope rule to new P0/P1 findings in prior-head..current-head. Missing proof fails closed."
+	}
 	return fmt.Sprintf(`---
 name: sam-harness-%s
 description: %s
@@ -787,6 +791,7 @@ func workflowDocument(cfg model.Config) string {
 		builder.WriteString("The production release boundary is not fully authorized. GitHub production and rollback receive no contents-write permission or GH_TOKEN, and those jobs remain structurally inactive.\n\n")
 	}
 	builder.WriteString(fmt.Sprintf("Release schedule: `%s` in IANA timezone `%s`. GitHub cron is evaluated in UTC; translate and verify the configured local schedule before enabling it. GitLab schedules are provider-side and require remote configuration plus readback.\n\n", cfg.Workflow.ReleaseSchedule.Cron, cfg.Workflow.ReleaseSchedule.Timezone))
+	builder.WriteString("Every review finding is runtime-proven against the altered diff. Initial findings must identify a current added or modified base-to-head line, or line 0 only for deletion-only, deleted, or pure-rename file-level evidence. During convergence, frozen unresolved actions remain eligible by their same-role manifest ID; new P0/P1 findings use the same rule in prior-head-to-current-head, while unrelated pre-existing findings do not create another repair loop. Missing proof fails closed. Each JSON receipt has an escaped standalone HTML companion beside it for human inspection and CI artifact transport.\n\n")
 	builder.WriteString("## Provider-side controls\n\n")
 	builder.WriteString("The six-role review is a pre-merge required-status gate. GitHub branch protection, the configured GitHub App check, merge queue rules, GitLab external status checks, protected branches, merge-request approvals, and protected production environments are provider-side controls. Generated files declare local boundaries only; read every remote rule and required check back before claiming it is active.\n\n")
 	if runtime := cfg.CI.AgentRuntime; runtime != nil && runtime.HostComplete() {
@@ -869,12 +874,38 @@ func writePathInventory(builder *strings.Builder, label, path string) {
 }
 
 func reviewerOutputSchema() string {
-	return string(schema.ReviewerOutputJSON)
+	var value map[string]any
+	if err := json.Unmarshal(schema.ReviewerOutputJSON, &value); err != nil {
+		return string(schema.ReviewerOutputJSON)
+	}
+	properties, ok := value["properties"].(map[string]any)
+	if !ok {
+		return string(schema.ReviewerOutputJSON)
+	}
+	findings, ok := properties["findings"].(map[string]any)
+	if !ok {
+		return string(schema.ReviewerOutputJSON)
+	}
+	items, ok := findings["items"].(map[string]any)
+	if !ok {
+		return string(schema.ReviewerOutputJSON)
+	}
+	itemProperties, ok := items["properties"].(map[string]any)
+	if !ok {
+		return string(schema.ReviewerOutputJSON)
+	}
+	itemProperties["id"] = map[string]any{"type": "string", "minLength": 1}
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return string(schema.ReviewerOutputJSON)
+	}
+	return string(data) + "\n"
 }
 
 func reviewersDocument(cfg model.Config) string {
 	var builder strings.Builder
 	builder.WriteString("# Independent reviewers\n\n")
+	builder.WriteString("Finding scope is strict: every initial finding must identify a current added or modified line in the base-to-head patch, or line 0 only for deletion-only, deleted, or pure-rename file-level evidence. A convergence re-review may retain a frozen action by its manifest ID when the reviewer role matches; new findings use the same scope rule in the prior-head-to-current-head patch. Pre-existing whole-file or repository findings are not new blockers, and missing proof fails closed.\n\n")
 	builder.WriteString("All six roles are required before merge. Each configured command must carry `filesystem_read_only: true`; provider-secret review also requires `trusted_external_command: true`. `trusted_config_arguments` contains actual zero-based argv positions, never index 0, for safe relative helper paths that runtime resolves from the trusted config directory rather than the target checkout. Sam-harness detects repository mutation but does not OS-sandbox arbitrary argv. Review commands receive a structured prompt containing the trusted base, untrusted head, exact patch, and their fingerprints, the role in `SAM_HARNESS_REVIEW_ROLE`, and must return exact JSON matching `.sam-harness/reviewer-output.schema.json`. Every reviewer must declare `review_complete: true` and report every actionable finding now with its exact `required_change` and observable `acceptance`. Sam-harness consolidates the complete role output into one lineage-bound, hashed repair manifest. P0 and P1 findings block; malformed output also blocks. P2 and P3 remain recorded in the same manifest so a repair can address all known work together. Secret-bearing CI review uses a protected agent environment, pinned released harness, trusted base configuration, and explicit `--review-base`; a fork or untrusted contribution without the protected secret fails closed.\n\n")
 	configured := map[model.ReviewerRole]model.ReviewerConfig{}
 	if cfg.Workflow != nil {
@@ -896,6 +927,7 @@ func reviewersDocument(cfg model.Config) string {
 func changeBudgetDocument(cfg model.Config) string {
 	var builder strings.Builder
 	builder.WriteString("# Bounded correction\n\n")
+	builder.WriteString("Review repair is bounded by one frozen manifest. The repair branch may receive the prior JSON receipt as an optional convergence input on its re-review; the initial full review is never weakened. Receipts are emitted as paired JSON and standalone escaped HTML artifacts containing the same lineage, finding, resolution, and patch identities.\n\n")
 	builder.WriteString("Correction is opt-in. Every enabled correction command must carry `filesystem_sandboxed: true`; provider-secret repair also requires `trusted_external_command: true`. `trusted_config_arguments` contains actual zero-based argv positions, never index 0, for safe relative helper paths that runtime resolves from the trusted config directory rather than the target checkout. Sam-harness does not OS-sandbox arbitrary argv. It receives a failed receipt on stdin; failed review receipts must contain an intact, conflict-free repair manifest. The repair independently verifies and applies every manifest action in one coherent correction, may write only inside its sandboxed local workspace, must stay inside cumulative file and line budgets measured from the frozen baseline, and must rerun static and test phases after every attempt. Automatic review repair is limited to one pass; the repair branch is re-reviewed but cannot spawn another automatic repair branch. Independent re-review remains required. Provider credentials and remote authority remain read-only until a separate trusted publisher boundary.\n\n")
 	if cfg.Workflow == nil || !cfg.Workflow.Correction.Enabled {
 		builder.WriteString("Correction is disabled. No repair command, branch, commit, push, or change request may be created.\n")
@@ -991,6 +1023,7 @@ func gatesDocument(cfg model.Config) string {
 - [ ] Commit: the commit SHA contains the reviewed change.
 - [ ] Remote: the expected remote branch contains that SHA.
 - [ ] Review: findings and approvals belong to the same SHA.
+- [ ] Review findings identify a current added or modified diff line, or line 0 only for deletion-only, deleted, or pure-rename file-level evidence; convergence closure references the frozen manifest and same-role IDs, and new P0/P1 regressions follow the same prior-head-to-current-head scope rule.
 - [ ] CI: required jobs passed for the reviewed SHA.
 - [ ] Artifact: the immutable digest came from that CI run.
 - [ ] Deployment: the environment reports that exact digest.
@@ -1167,7 +1200,7 @@ on:
 		builder.WriteString("  schedule:\n    - cron: " + yamlSingle(cfg.Workflow.ReleaseSchedule.Cron) + "\n")
 		builder.WriteString("      # Configured IANA timezone: " + cfg.Workflow.ReleaseSchedule.Timezone + "; GitHub evaluates cron in UTC.\n")
 	}
-	builder.WriteString("\npermissions:\n  contents: read\n  pull-requests: read\n")
+	builder.WriteString("\npermissions:\n  contents: read\n  actions: read\n  pull-requests: read\n")
 	builder.WriteString(`
 
 jobs:
@@ -1243,6 +1276,7 @@ on:
 	}
 	builder.WriteString(`
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -1257,6 +1291,7 @@ jobs:
       pr_number: ${{ steps.identity.outputs.pr_number }}
       source_run_id: ${{ steps.identity.outputs.source_run_id }}
       head_ref: ${{ steps.identity.outputs.head_ref }}
+      prior_review_run_id: ${{ steps.identity.outputs.prior_review_run_id }}
     steps:
       - name: Create least-privilege GitHub App identity token
         id: app-token
@@ -1276,6 +1311,7 @@ jobs:
           EVENT_HEAD_REF: ${{ github.event.client_payload.merge_group_ref }}
           EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
           SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          REPAIR_BRANCH_PREFIX: ` + yamlSingle(cfg.Workflow.Correction.BranchPrefix) + `
         run: |
           set -eu
           head_sha="$EVENT_HEAD_SHA"
@@ -1312,7 +1348,18 @@ jobs:
           if [ "$EVENT_KIND" = pull_request_target ]; then
             test "$base_sha" = "$EVENT_BASE_SHA"
           fi
-          printf 'head_sha=%s\nbase_sha=%s\npr_number=%s\nsource_run_id=%s\nhead_ref=%s\n' "$head_sha" "$base_sha" "$pr_number" "$SOURCE_RUN_ID" "$head_ref" >> "$GITHUB_OUTPUT"
+          prior_review_run_id=""
+          case "$head_ref" in
+            "$REPAIR_BRANCH_PREFIX"*)
+              suffix="${head_ref#"$REPAIR_BRANCH_PREFIX"}"
+              candidate="${suffix%%-*}"
+              case "$candidate" in
+                ''|*[!0-9]*) ;;
+                *) prior_review_run_id="$candidate" ;;
+              esac
+              ;;
+          esac
+          printf 'head_sha=%s\nbase_sha=%s\npr_number=%s\nsource_run_id=%s\nhead_ref=%s\nprior_review_run_id=%s\n' "$head_sha" "$base_sha" "$pr_number" "$SOURCE_RUN_ID" "$head_ref" "$prior_review_run_id" >> "$GITHUB_OUTPUT"
 `)
 	if reviewBound {
 		writeGitHubTrustedReviewControlPlane(&builder, cfg, control)
@@ -1360,10 +1407,14 @@ func writeGitHubTrustedReviewControlPlane(builder *strings.Builder, cfg model.Co
 	builder.WriteString("    needs: [resolve, start_review_check]\n    runs-on: ubuntu-latest\n")
 	builder.WriteString("    environment:\n      name: " + yamlSingle(cfg.CI.AgentSecretEnvironments["github"]) + "\n")
 	builder.WriteString(`    permissions:
+      actions: read
       contents: read
     steps:
 `)
 	writeGitHubTrustedExactCheckout(builder)
+	if repairEnabled(cfg) {
+		writeGitHubPriorReviewDownload(builder, cfg, "sam-harness-trusted-review-evidence", "${{ needs.resolve.outputs.prior_review_run_id }}")
+	}
 	builder.WriteString(`      - name: Run six-role review from trusted base control plane
         id: phase
         continue-on-error: true
@@ -1371,7 +1422,8 @@ func writeGitHubTrustedReviewControlPlane(builder *strings.Builder, cfg model.Co
 	writeGitHubStepSecretEnv(builder, cfg, model.CISecretScopeReview)
 	builder.WriteString("        run: |\n          set -eu\n")
 	writeGitHubSecretGuards(builder, cfg, model.CISecretScopeReview, "          ")
-	builder.WriteString("          set +e\n          output=\"$(" + trustedReviewCommand(cfg, `"${{ needs.resolve.outputs.base_sha }}"`, `"${{ needs.resolve.outputs.head_sha }}"`) + " 2>&1)\"\n")
+	trustedReview := trustedReviewCommand(cfg, `"${{ needs.resolve.outputs.base_sha }}"`, `"${{ needs.resolve.outputs.head_sha }}"`)
+	builder.WriteString("          set +e\n          prior_review_receipt=\"\"\n          if [ -d \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" ]; then\n            prior_review_count=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print | wc -l | tr -d '[:space:]')\"\n            test \"$prior_review_count\" -eq 1\n            prior_review_receipt=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print)\"\n          fi\n          if [ -n \"$prior_review_receipt\" ]; then\n            output=\"$(" + trustedReview + " --prior-review-receipt \"$prior_review_receipt\" 2>&1)\"\n          else\n            output=\"$(" + trustedReview + " 2>&1)\"\n          fi\n")
 	builder.WriteString(`          status=$?
           set -e
           printf '%s\n' "$output"
@@ -1391,7 +1443,9 @@ func writeGitHubTrustedReviewControlPlane(builder *strings.Builder, cfg model.Co
           test "$actual_review_patch_sha256" = "$review_patch_sha256"
           test "$(jq -r '.review_base_sha' "$receipt")" = "${{ needs.resolve.outputs.base_sha }}"
           test "$(jq -r '.review_head_sha' "$receipt")" = "${{ needs.resolve.outputs.head_sha }}"
-          printf 'phase_receipt=%s\nreview_patch=%s\n' "$receipt" "$review_patch" >> "$GITHUB_OUTPUT"
+          review_html="${receipt%.json}.html"
+          test -f "$review_html"
+          printf 'phase_receipt=%s\nphase_receipt_html=%s\nreview_patch=%s\n' "$receipt" "$review_html" "$review_patch" >> "$GITHUB_OUTPUT"
           exit "$status"
       - name: Preserve trusted review receipt and exact patch
         if: always()
@@ -1401,6 +1455,7 @@ func writeGitHubTrustedReviewControlPlane(builder *strings.Builder, cfg model.Co
           if-no-files-found: error
           path: |
             ${{ steps.phase.outputs.phase_receipt }}
+            ${{ steps.phase.outputs.phase_receipt_html }}
             ${{ steps.phase.outputs.review_patch }}
       - name: Preserve the failed trusted review status
         if: steps.phase.outcome == 'failure'
@@ -1465,6 +1520,7 @@ func writeGitHubTrustedExactCheckout(builder *strings.Builder) {
           persist-credentials: false
           ref: ${{ needs.resolve.outputs.head_sha }}
           path: target
+          fetch-depth: 0
       - name: Check out exact trusted base SHA as control plane
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -1479,6 +1535,37 @@ func writeGitHubTrustedExactCheckout(builder *strings.Builder) {
           set -eu
           test -s "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" || { echo 'trusted base .sam-harness/config.yaml is unavailable; initial adoption fails closed' >&2; exit 1; }
           go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v` + model.HarnessVersion + ` help >/dev/null || { echo 'released sam-harness v` + model.HarnessVersion + ` is unavailable; release it before enabling secret-bearing CI' >&2; exit 1; }
+`)
+}
+
+func writeGitHubPriorReviewDownload(builder *strings.Builder, cfg model.Config, artifactName, runID string) {
+	builder.WriteString(`      - name: Resolve prior review run for bounded repair re-review
+        id: prior_review
+        env:
+          REPAIR_BRANCH_PREFIX: ` + yamlSingle(cfg.Workflow.Correction.BranchPrefix) + `
+        run: |
+          set -eu
+          head_ref="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          run_id=""
+          case "$head_ref" in
+            "$REPAIR_BRANCH_PREFIX"*)
+              suffix="${head_ref#"$REPAIR_BRANCH_PREFIX"}"
+              candidate="${suffix%%-*}"
+              case "$candidate" in
+                ''|*[!0-9]*) ;;
+                *) run_id="$candidate" ;;
+              esac
+              ;;
+          esac
+          printf 'run_id=%s\n' "$run_id" >> "$GITHUB_OUTPUT"
+      - name: Restore frozen review receipt from the source run
+        if: steps.prior_review.outputs.run_id != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ` + artifactName + `
+          path: target/.sam-harness/evidence/prior-review
+          run-id: ` + runID + `
+          github-token: ${{ github.token }}
 `)
 }
 
@@ -1571,7 +1658,9 @@ func writeGitHubTrustedRepairJob(builder *strings.Builder, cfg model.Config, job
           esac
           actual_repair_patch_sha256="$(sha256sum "$repair_patch" | awk '{print $1}')"
           test "$actual_repair_patch_sha256" = "$repair_patch_sha256"
-          printf 'repair_patch=%s\nrepair_receipt=%s\n' "$repair_patch" "$repair_receipt" >> "$GITHUB_OUTPUT"
+          repair_html="${repair_receipt%.json}.html"
+          test -f "$repair_html"
+          printf 'repair_patch=%s\nrepair_receipt=%s\nrepair_html=%s\n' "$repair_patch" "$repair_receipt" "$repair_html" >> "$GITHUB_OUTPUT"
       - name: Preserve canonical repair patch and receipt as untrusted data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -1580,6 +1669,7 @@ func writeGitHubTrustedRepairJob(builder *strings.Builder, cfg model.Config, job
           path: |
             ${{ steps.repair.outputs.repair_patch }}
             ${{ steps.repair.outputs.repair_receipt }}
+            ${{ steps.repair.outputs.repair_html }}
 `)
 }
 
@@ -1723,7 +1813,7 @@ func writeGitHubPhaseJob(builder *strings.Builder, cfg model.Config, job string,
           if-no-files-found: error
           path: `)
 	if repairable {
-		builder.WriteString("${{ steps.phase.outputs.phase_receipt }}\n")
+		builder.WriteString("|\n            ${{ steps.phase.outputs.phase_receipt }}\n            ${{ steps.phase.outputs.phase_receipt_html }}\n")
 	} else {
 		builder.WriteString(".sam-harness/evidence/\n")
 	}
@@ -1747,7 +1837,9 @@ func writeGitHubCapturedPipelineCommand(builder *strings.Builder, command string
           receipt="$(printf '%s\n' "$output" | sed -n 's/^Receipt: //p' | tail -n 1)"
           test -n "$receipt"
           test -f "$receipt"
-          printf 'phase_receipt=%s\n' "$receipt" >> "$GITHUB_OUTPUT"
+          receipt_html="${receipt%.json}.html"
+          test -f "$receipt_html"
+          printf 'phase_receipt=%s\nphase_receipt_html=%s\n' "$receipt" "$receipt_html" >> "$GITHUB_OUTPUT"
           exit "$status"
 `)
 }
@@ -1762,10 +1854,13 @@ func writeGitHubReviewJob(builder *strings.Builder, cfg model.Config) {
 	} else {
 		builder.WriteString("    if: ${{ false }} # Network authority is not granted; keep the pre-merge review gate structurally inactive.\n")
 	}
-	builder.WriteString("    permissions:\n      contents: read\n")
+	builder.WriteString("    permissions:\n      actions: read\n      contents: read\n")
 	writeGitHubAgentEnvironment(builder, cfg, model.CISecretScopeReview)
 	builder.WriteString("    steps:\n")
 	writeGitHubTrustedAgentBootstrap(builder)
+	if repairEnabled(cfg) {
+		writeGitHubPriorReviewDownload(builder, cfg, "sam-harness-receipts-review", "${{ steps.prior_review.outputs.run_id }}")
+	}
 	builder.WriteString(`      - name: Run review phase from trusted control plane
         id: phase
         continue-on-error: true
@@ -1773,7 +1868,8 @@ func writeGitHubReviewJob(builder *strings.Builder, cfg model.Config) {
 	writeGitHubStepSecretEnv(builder, cfg, model.CISecretScopeReview)
 	builder.WriteString("        run: |\n          set -eu\n")
 	writeGitHubSecretGuards(builder, cfg, model.CISecretScopeReview, "          ")
-	builder.WriteString("          set +e\n          output=\"$(" + trustedPipelineCommand(cfg, model.PhaseReview) + " 2>&1)\"\n")
+	trustedReview := trustedPipelineCommand(cfg, model.PhaseReview)
+	builder.WriteString("          set +e\n          prior_review_receipt=\"\"\n          if [ -d \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" ]; then\n            prior_review_count=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print | wc -l | tr -d '[:space:]')\"\n            test \"$prior_review_count\" -eq 1\n            prior_review_receipt=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print)\"\n          fi\n          if [ -n \"$prior_review_receipt\" ]; then\n            output=\"$(" + trustedReview + " --prior-review-receipt \"$prior_review_receipt\" 2>&1)\"\n          else\n            output=\"$(" + trustedReview + " 2>&1)\"\n          fi\n")
 	builder.WriteString(`          status=$?
           set -e
           printf '%s\n' "$output"
@@ -1791,7 +1887,9 @@ func writeGitHubReviewJob(builder *strings.Builder, cfg model.Config) {
           esac
           actual_review_patch_sha256="$(sha256sum "$review_patch" | awk '{print $1}')"
           test "$actual_review_patch_sha256" = "$review_patch_sha256"
-          printf 'phase_receipt=%s\n' "$receipt" >> "$GITHUB_OUTPUT"
+          review_html="${receipt%.json}.html"
+          test -f "$review_html"
+          printf 'phase_receipt=%s\nphase_receipt_html=%s\n' "$receipt" "$review_html" >> "$GITHUB_OUTPUT"
           printf 'review_patch=%s\n' "$review_patch" >> "$GITHUB_OUTPUT"
           exit "$status"
       - name: Preserve review receipt
@@ -1802,6 +1900,7 @@ func writeGitHubReviewJob(builder *strings.Builder, cfg model.Config) {
           if-no-files-found: error
           path: |
             ${{ steps.phase.outputs.phase_receipt }}
+            ${{ steps.phase.outputs.phase_receipt_html }}
             ${{ steps.phase.outputs.review_patch }}
       - name: Preserve the failed review status
         if: steps.phase.outcome == 'failure'
@@ -1816,6 +1915,7 @@ func writeGitHubTrustedAgentBootstrap(builder *strings.Builder) {
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
           path: target
+          fetch-depth: 0
       - name: Check out trusted base control plane
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -1956,8 +2056,11 @@ func writeGitHubRepairJob(builder *strings.Builder, cfg model.Config, phase mode
           esac
           actual_repair_patch_sha256="$(sha256sum "$repair_patch" | awk '{print $1}')"
           test "$actual_repair_patch_sha256" = "$repair_patch_sha256"
+          repair_html="${repair_receipt%.json}.html"
+          test -f "$repair_html"
           printf 'repair_patch=%s\n' "$repair_patch" >> "$GITHUB_OUTPUT"
           printf 'repair_receipt=%s\n' "$repair_receipt" >> "$GITHUB_OUTPUT"
+          printf 'repair_html=%s\n' "$repair_html" >> "$GITHUB_OUTPUT"
       - name: Preserve repair patch as untrusted data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -1966,6 +2069,7 @@ func writeGitHubRepairJob(builder *strings.Builder, cfg model.Config, phase mode
           path: |
             ${{ steps.repair.outputs.repair_patch }}
             ${{ steps.repair.outputs.repair_receipt }}
+            ${{ steps.repair.outputs.repair_html }}
 `)
 }
 
@@ -2180,10 +2284,12 @@ sam-harness-review:
 `)
 	writeGitLabAgentEnvironment(builder, cfg, model.CISecretScopeReview)
 	builder.WriteString("  script:\n")
+	builder.WriteString("    - |\n      set -eu\n      review_base_sha=\"${CI_MERGE_REQUEST_DIFF_BASE_SHA:-${CI_COMMIT_BEFORE_SHA:-}}\"\n      prior_review_receipt=\"\"\n      case \"${CI_COMMIT_REF_NAME:-}\" in\n        " + shellQuote(cfg.Workflow.Correction.BranchPrefix) + "*-review)\n          prior_review_count=\"$(find \"$CI_PROJECT_DIR/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print 2>/dev/null | wc -l | tr -d '[:space:]')\"\n          test \"$prior_review_count\" -eq 1 || { echo 'repair-branch re-review requires exactly one frozen prior review receipt' >&2; exit 1; }\n          prior_review_receipt=\"$(find \"$CI_PROJECT_DIR/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print)\"\n          review_base_sha=\"$(sed -n 's/^[[:space:]]*\"review_base_sha\":[[:space:]]*\"\\([^\"]*\\)\"[,]\\{0,1\\}[[:space:]]*$/\\1/p' \"$prior_review_receipt\")\"\n          ;;\n      esac\n      test -n \"$review_base_sha\" || { echo 'exact review base SHA is unavailable' >&2; exit 1; }\n      test -n \"${CI_COMMIT_SHA:-}\" || { echo 'exact review head SHA is unavailable' >&2; exit 1; }\n      export SAM_HARNESS_REVIEW_BASE_SHA=\"$review_base_sha\"\n      export SAM_HARNESS_PRIOR_REVIEW_RECEIPT=\"$prior_review_receipt\"\n")
 	writeGitLabTrustedConfigFetch(builder)
 	builder.WriteString("    - |\n      set -eu\n")
 	writeGitLabSecretGuards(builder, cfg, model.CISecretScopeReview, "      ")
-	builder.WriteString("      " + gitLabCommandWithSecrets(cfg, model.CISecretScopeReview, gitLabTrustedPipelineCommand(cfg, model.PhaseReview)) + "\n")
+	reviewCommand := gitLabCommandWithSecrets(cfg, model.CISecretScopeReview, gitLabTrustedPipelineCommand(cfg, model.PhaseReview))
+	builder.WriteString("      if [ -n \"$SAM_HARNESS_PRIOR_REVIEW_RECEIPT\" ]; then\n        " + reviewCommand + " --prior-review-receipt \"$SAM_HARNESS_PRIOR_REVIEW_RECEIPT\"\n      else\n        " + reviewCommand + "\n      fi\n")
 	builder.WriteString(`  artifacts:
     when: always
     paths:
@@ -2202,7 +2308,7 @@ sam-harness-review:
 func writeGitLabTrustedConfigFetch(builder *strings.Builder) {
 	builder.WriteString(`    - |
       set -eu
-      trusted_ref="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      trusted_ref="${SAM_HARNESS_REVIEW_BASE_SHA:-${CI_MERGE_REQUEST_DIFF_BASE_SHA:-${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}}}"
       test -n "$trusted_ref"
       trusted_control="$CI_BUILDS_DIR/sam-harness-trusted-${CI_PROJECT_ID}-${CI_JOB_ID}"
       trap 'git -c core.hooksPath=/dev/null worktree remove --force "$trusted_control" >/dev/null 2>&1 || true' EXIT
@@ -2256,6 +2362,8 @@ func writeGitLabRepairJob(builder *strings.Builder, cfg model.Config, imageName 
       repair_receipt="$(printf '%s\n' "$repair_output" | sed -n 's/^Receipt: //p' | tail -n 1)"
       test -n "$repair_receipt"
       test -f "$repair_receipt"
+      repair_html="${repair_receipt%.json}.html"
+      test -f "$repair_html"
       repair_patch="$(sed -n 's/^[[:space:]]*"repair_patch":[[:space:]]*"\([^"]*\)"[,]\{0,1\}[[:space:]]*$/\1/p' "$repair_receipt")"
       repair_patch_sha256="$(sed -n 's/^[[:space:]]*"repair_patch_sha256":[[:space:]]*"\([^"]*\)"[,]\{0,1\}[[:space:]]*$/\1/p' "$repair_receipt")"
       test -n "$repair_patch"
@@ -2269,8 +2377,14 @@ func writeGitLabRepairJob(builder *strings.Builder, cfg model.Config, imageName 
       test "$actual_repair_patch_sha256" = "$repair_patch_sha256"
       artifact_dir="$CI_PROJECT_DIR/.sam-harness/evidence/repair-artifacts/` + string(phase) + `"
       mkdir -p "$artifact_dir"
-      cp -p "$repair_patch" "$repair_receipt" "$artifact_dir/"
-  artifacts:
+      cp -p "$repair_patch" "$repair_receipt" "$repair_html" "$artifact_dir/"
+`)
+	if phase == model.PhaseReview {
+		builder.WriteString(`      mkdir -p "$artifact_dir/prior-review"
+      cp -p "$receipt" "$artifact_dir/prior-review/"
+`)
+	}
+	builder.WriteString(`  artifacts:
     when: always
     paths:
       - .sam-harness/evidence/repair-artifacts/` + string(phase) + `/
@@ -2315,13 +2429,30 @@ sam-harness-publish-repair:
       set -eu
       git config core.hooksPath /dev/null
 `)
-	builder.WriteString("      branch=" + shellQuote(correction.BranchPrefix) + `"${CI_PIPELINE_ID}-${CI_JOB_ID}"
-      patch_count="$(find .sam-harness/evidence/repair-artifacts -type f -name '*-repair.patch' -print | wc -l | tr -d '[:space:]')"
+	builder.WriteString(`      patch_count="$(find .sam-harness/evidence/repair-artifacts -type f -name '*-repair.patch' -print | wc -l | tr -d '[:space:]')"
       receipt_count="$(find .sam-harness/evidence/repair-artifacts -type f -name '*-repair.json' -print | wc -l | tr -d '[:space:]')"
+      html_count="$(find .sam-harness/evidence/repair-artifacts -type f -name '*-repair.html' -print | wc -l | tr -d '[:space:]')"
       test "$patch_count" -eq 1
       test "$receipt_count" -eq 1
+      test "$html_count" -eq 1
       patch="$(find .sam-harness/evidence/repair-artifacts -type f -name '*-repair.patch' -print)"
       repair_receipt="$(find .sam-harness/evidence/repair-artifacts -type f -name '*-repair.json' -print)"
+      repair_html="$(find .sam-harness/evidence/repair-artifacts -type f -name '*-repair.html' -print)"
+      test "$(basename "$repair_html" .html)" = "$(basename "$repair_receipt" .json)"
+      repair_phase="$(basename "$(dirname "$patch")")"
+      case "$repair_phase" in
+        static|test|review|artifact) ;;
+        *) echo 'repair artifact has an invalid source phase' >&2; exit 1 ;;
+      esac
+      branch=` + shellQuote(correction.BranchPrefix) + `"${CI_PIPELINE_ID}-${CI_JOB_ID}-${repair_phase}"
+      prior_review_count="$(find .sam-harness/evidence/repair-artifacts -type f -name '*-pipeline-review.json' -print | wc -l | tr -d '[:space:]')"
+      if [ "$repair_phase" = review ]; then
+        test "$prior_review_count" -eq 1 || { echo 'review repair is missing its frozen prior review receipt' >&2; exit 1; }
+        prior_review_receipt="$(find .sam-harness/evidence/repair-artifacts -type f -name '*-pipeline-review.json' -print)"
+      else
+        test "$prior_review_count" -eq 0
+        prior_review_receipt=""
+      fi
       receipt_patch="$(sed -n 's/^[[:space:]]*"repair_patch":[[:space:]]*"\([^"]*\)"[,]\{0,1\}[[:space:]]*$/\1/p' "$repair_receipt")"
       expected_patch_sha256="$(sed -n 's/^[[:space:]]*"repair_patch_sha256":[[:space:]]*"\([^"]*\)"[,]\{0,1\}[[:space:]]*$/\1/p' "$repair_receipt")"
       test -n "$receipt_patch"
@@ -2332,6 +2463,11 @@ sam-harness-publish-repair:
       git apply --check "$patch"
       git switch -c "$branch"
       git apply --index "$patch"
+      if [ -n "$prior_review_receipt" ]; then
+        mkdir -p .sam-harness/evidence/prior-review
+        cp -p "$prior_review_receipt" .sam-harness/evidence/prior-review/
+        git add -f .sam-harness/evidence/prior-review/"$(basename "$prior_review_receipt")"
+      fi
       test -n "$(git diff --cached --name-only)"
       git config user.name 'sam-harness[bot]'
       git config user.email 'sam-harness[bot]@users.noreply.gitlab.com'
@@ -2435,7 +2571,7 @@ func gitLabTrustedConfigPipelineCommand(cfg model.Config, phase model.Phase) str
 func gitLabTrustedPipelineCommand(cfg model.Config, phase model.Phase) string {
 	command := fmt.Sprintf("%s pipeline \"$CI_PROJECT_DIR\" --config \"$CI_BUILDS_DIR/sam-harness-trusted-${CI_PROJECT_ID}-${CI_JOB_ID}/.sam-harness/config.yaml\"", trustedHarnessExecutable(cfg))
 	if phase == model.PhaseReview {
-		command += " --review-base \"$CI_BUILDS_DIR/sam-harness-trusted-${CI_PROJECT_ID}-${CI_JOB_ID}\""
+		command += " --review-base \"$CI_BUILDS_DIR/sam-harness-trusted-${CI_PROJECT_ID}-${CI_JOB_ID}\" --review-base-sha \"$SAM_HARNESS_REVIEW_BASE_SHA\" --review-head-sha \"$CI_COMMIT_SHA\""
 	}
 	return fmt.Sprintf("%s --phase %s --receipt true", command, phase)
 }

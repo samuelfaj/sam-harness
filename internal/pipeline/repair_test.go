@@ -181,11 +181,16 @@ func TestReviewRepairRequiresIntactManifestAndIncludesEveryActionInPrompt(t *tes
 		{name: "digest", mutate: func(receipt *Receipt) { receipt.RepairManifestSHA256 = strings.Repeat("0", sha256.Size*2) }, errorMatch: "digest does not match"},
 		{name: "base fingerprint", mutate: func(receipt *Receipt) { receipt.RepairManifest.ReviewBaseFingerprint = "different" }, errorMatch: "lineage does not match"},
 		{name: "empty actions", mutate: func(receipt *Receipt) { receipt.RepairManifest.Actions = nil }, errorMatch: "actions do not match findings"},
-		{name: "invalid action", mutate: func(receipt *Receipt) { receipt.RepairManifest.Actions[0].Path = "../escape" }, errorMatch: "invalid"},
+		{name: "invalid action", mutate: func(receipt *Receipt) {
+			receipt.Findings[0].Path = "../escape"
+			receipt.Findings[0].ID = findingIdentity(receipt.Findings[0])
+			receipt.RepairManifest.Actions[0] = receipt.Findings[0]
+		}, errorMatch: "invalid"},
 		{name: "no blocker", mutate: func(receipt *Receipt) {
 			for index := range receipt.Findings {
 				receipt.Findings[index].Severity = "P2"
-				receipt.RepairManifest.Actions[index].Severity = "P2"
+				receipt.Findings[index].ID = findingIdentity(receipt.Findings[index])
+				receipt.RepairManifest.Actions[index] = receipt.Findings[index]
 			}
 			digest, digestErr := repairManifestDigest(*receipt.RepairManifest)
 			if digestErr != nil {

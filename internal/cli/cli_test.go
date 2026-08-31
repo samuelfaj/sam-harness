@@ -27,8 +27,8 @@ func TestVersionPrintsHarnessVersion(t *testing.T) {
 	if stdout.String() != want {
 		t.Fatalf("version = %q, want %q", stdout.String(), want)
 	}
-	if model.HarnessVersion != "0.6.1" {
-		t.Fatalf("HarnessVersion = %q, want 0.6.1 for this release", model.HarnessVersion)
+	if model.HarnessVersion != "0.7.0" {
+		t.Fatalf("HarnessVersion = %q, want 0.7.0 for this release", model.HarnessVersion)
 	}
 }
 
@@ -524,6 +524,8 @@ func TestPipelineCLIUsesTrustedConfigOverrideAndHelpDocumentsIt(t *testing.T) {
 	if !strings.Contains(stdout.String(), "pipeline [path] [--config absolute-or-contained-file]") ||
 		!strings.Contains(stdout.String(), "--review-base absolute-directory") ||
 		!strings.Contains(stdout.String(), "--review-base-sha hex --review-head-sha hex") ||
+		!strings.Contains(stdout.String(), "--prior-review-receipt file") ||
+		!strings.Contains(stdout.String(), "Re-review may provide --prior-review-receipt") ||
 		!strings.Contains(stdout.String(), "repair [path] [--config absolute-or-contained-file]") ||
 		!strings.Contains(stdout.String(), "--config defaults to <path>/.sam-harness/config.yaml") {
 		t.Fatalf("CLI help omits trusted config syntax:\n%s", stdout.String())

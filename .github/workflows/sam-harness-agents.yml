@@ -13,6 +13,7 @@ on:
     types: [completed]
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -27,6 +28,7 @@ jobs:
       pr_number: ${{ steps.identity.outputs.pr_number }}
       source_run_id: ${{ steps.identity.outputs.source_run_id }}
       head_ref: ${{ steps.identity.outputs.head_ref }}
+      prior_review_run_id: ${{ steps.identity.outputs.prior_review_run_id }}
     steps:
       - name: Create least-privilege GitHub App identity token
         id: app-token
@@ -46,6 +48,7 @@ jobs:
           EVENT_HEAD_REF: ${{ github.event.client_payload.merge_group_ref }}
           EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
           SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          REPAIR_BRANCH_PREFIX: sam-harness/repair/
         run: |
           set -eu
           head_sha="$EVENT_HEAD_SHA"
@@ -82,7 +85,18 @@ jobs:
           if [ "$EVENT_KIND" = pull_request_target ]; then
             test "$base_sha" = "$EVENT_BASE_SHA"
           fi
-          printf 'head_sha=%s\nbase_sha=%s\npr_number=%s\nsource_run_id=%s\nhead_ref=%s\n' "$head_sha" "$base_sha" "$pr_number" "$SOURCE_RUN_ID" "$head_ref" >> "$GITHUB_OUTPUT"
+          prior_review_run_id=""
+          case "$head_ref" in
+            "$REPAIR_BRANCH_PREFIX"*)
+              suffix="${head_ref#"$REPAIR_BRANCH_PREFIX"}"
+              candidate="${suffix%%-*}"
+              case "$candidate" in
+                ''|*[!0-9]*) ;;
+                *) prior_review_run_id="$candidate" ;;
+              esac
+              ;;
+          esac
+          printf 'head_sha=%s\nbase_sha=%s\npr_number=%s\nsource_run_id=%s\nhead_ref=%s\nprior_review_run_id=%s\n' "$head_sha" "$base_sha" "$pr_number" "$SOURCE_RUN_ID" "$head_ref" "$prior_review_run_id" >> "$GITHUB_OUTPUT"
 
   start_review_check:
     if: github.event_name == 'pull_request_target' || github.event_name == 'repository_dispatch'
@@ -118,6 +132,7 @@ jobs:
     environment:
       name: 'sam-harness-agents'
     permissions:
+      actions: read
       contents: read
     steps:
       - name: Check out exact target SHA as untrusted data
@@ -126,6 +141,7 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.resolve.outputs.head_sha }}
           path: target
+          fetch-depth: 0
       - name: Check out exact trusted base SHA as control plane
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -139,7 +155,15 @@ jobs:
         run: |
           set -eu
           test -s "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" || { echo 'trusted base .sam-harness/config.yaml is unavailable; initial adoption fails closed' >&2; exit 1; }
-          go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.6.1 help >/dev/null || { echo 'released sam-harness v0.6.1 is unavailable; release it before enabling secret-bearing CI' >&2; exit 1; }
+          go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.7.0 help >/dev/null || { echo 'released sam-harness v0.7.0 is unavailable; release it before enabling secret-bearing CI' >&2; exit 1; }
+      - name: Restore frozen review receipt for repair-branch convergence
+        if: needs.resolve.outputs.prior_review_run_id != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sam-harness-trusted-review-evidence
+          path: target/.sam-harness/evidence/prior-review
+          run-id: ${{ needs.resolve.outputs.prior_review_run_id }}
+          github-token: ${{ github.token }}
       - name: Run six-role review from trusted base control plane
         id: phase
         continue-on-error: true
@@ -149,7 +173,17 @@ jobs:
           set -eu
           test -n "${OPENAI_API_KEY:-}" || { echo "required protected environment secret OPENAI_API_KEY is unavailable; fork and untrusted pull requests fail closed" >&2; exit 1; }
           set +e
-          output="$(go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.6.1 pipeline "${GITHUB_WORKSPACE}/target" --config "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" --review-base "${GITHUB_WORKSPACE}/trusted-control" --review-base-sha "${{ needs.resolve.outputs.base_sha }}" --review-head-sha "${{ needs.resolve.outputs.head_sha }}" --phase review --receipt true 2>&1)"
+          prior_review_receipt=""
+          if [ -d "${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review" ]; then
+            prior_review_count="$(find "${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review" -type f -name '*-pipeline-review.json' -print | wc -l | tr -d '[:space:]')"
+            test "$prior_review_count" -eq 1
+            prior_review_receipt="$(find "${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review" -type f -name '*-pipeline-review.json' -print)"
+          fi
+          if [ -n "$prior_review_receipt" ]; then
+            output="$(go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.7.0 pipeline "${GITHUB_WORKSPACE}/target" --config "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" --review-base "${GITHUB_WORKSPACE}/trusted-control" --review-base-sha "${{ needs.resolve.outputs.base_sha }}" --review-head-sha "${{ needs.resolve.outputs.head_sha }}" --prior-review-receipt "$prior_review_receipt" --phase review --receipt true 2>&1)"
+          else
+            output="$(go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.7.0 pipeline "${GITHUB_WORKSPACE}/target" --config "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" --review-base "${GITHUB_WORKSPACE}/trusted-control" --review-base-sha "${{ needs.resolve.outputs.base_sha }}" --review-head-sha "${{ needs.resolve.outputs.head_sha }}" --phase review --receipt true 2>&1)"
+          fi
           status=$?
           set -e
           printf '%s\n' "$output"
@@ -169,7 +203,9 @@ jobs:
           test "$actual_review_patch_sha256" = "$review_patch_sha256"
           test "$(jq -r '.review_base_sha' "$receipt")" = "${{ needs.resolve.outputs.base_sha }}"
           test "$(jq -r '.review_head_sha' "$receipt")" = "${{ needs.resolve.outputs.head_sha }}"
-          printf 'phase_receipt=%s\nreview_patch=%s\n' "$receipt" "$review_patch" >> "$GITHUB_OUTPUT"
+          review_html="${receipt%.json}.html"
+          test -f "$review_html"
+          printf 'phase_receipt=%s\nphase_receipt_html=%s\nreview_patch=%s\n' "$receipt" "$review_html" "$review_patch" >> "$GITHUB_OUTPUT"
           exit "$status"
       - name: Preserve trusted review receipt and exact patch
         if: always()
@@ -179,6 +215,7 @@ jobs:
           if-no-files-found: error
           path: |
             ${{ steps.phase.outputs.phase_receipt }}
+            ${{ steps.phase.outputs.phase_receipt_html }}
             ${{ steps.phase.outputs.review_patch }}
       - name: Preserve the failed trusted review status
         if: steps.phase.outcome == 'failure'
@@ -250,6 +287,7 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.resolve.outputs.head_sha }}
           path: target
+          fetch-depth: 0
       - name: Check out exact trusted base SHA as control plane
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -263,7 +301,7 @@ jobs:
         run: |
           set -eu
           test -s "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" || { echo 'trusted base .sam-harness/config.yaml is unavailable; initial adoption fails closed' >&2; exit 1; }
-          go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.6.1 help >/dev/null || { echo 'released sam-harness v0.6.1 is unavailable; release it before enabling secret-bearing CI' >&2; exit 1; }
+          go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.7.0 help >/dev/null || { echo 'released sam-harness v0.7.0 is unavailable; release it before enabling secret-bearing CI' >&2; exit 1; }
       - name: Restore exact failed trusted review receipt
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -280,7 +318,7 @@ jobs:
           test "$receipt_count" -eq 1
           receipt="$(find "${GITHUB_WORKSPACE}/target/.sam-harness/evidence/repair-input" -type f -name '*-pipeline-review.json' -print)"
           test "$(jq -r '.status' "$receipt")" = blocked
-          repair_output="$(go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.6.1 repair "${GITHUB_WORKSPACE}/target" --config "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" --receipt "$receipt" --receipt-output true 2>&1)"
+          repair_output="$(go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.7.0 repair "${GITHUB_WORKSPACE}/target" --config "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" --receipt "$receipt" --receipt-output true 2>&1)"
           printf '%s\n' "$repair_output"
           repair_receipt="$(printf '%s\n' "$repair_output" | sed -n 's/^Receipt: //p' | tail -n 1)"
           test -n "$repair_receipt"
@@ -296,7 +334,9 @@ jobs:
           esac
           actual_repair_patch_sha256="$(sha256sum "$repair_patch" | awk '{print $1}')"
           test "$actual_repair_patch_sha256" = "$repair_patch_sha256"
-          printf 'repair_patch=%s\nrepair_receipt=%s\n' "$repair_patch" "$repair_receipt" >> "$GITHUB_OUTPUT"
+          repair_html="${repair_receipt%.json}.html"
+          test -f "$repair_html"
+          printf 'repair_patch=%s\nrepair_receipt=%s\nrepair_html=%s\n' "$repair_patch" "$repair_receipt" "$repair_html" >> "$GITHUB_OUTPUT"
       - name: Preserve canonical repair patch and receipt as untrusted data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -305,6 +345,7 @@ jobs:
           path: |
             ${{ steps.repair.outputs.repair_patch }}
             ${{ steps.repair.outputs.repair_receipt }}
+            ${{ steps.repair.outputs.repair_html }}
 
   repair_failed_phase:
     if: github.event_name == 'workflow_run' && needs.resolve.result == 'success'
@@ -322,6 +363,7 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.resolve.outputs.head_sha }}
           path: target
+          fetch-depth: 0
       - name: Check out exact trusted base SHA as control plane
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -335,7 +377,7 @@ jobs:
         run: |
           set -eu
           test -s "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" || { echo 'trusted base .sam-harness/config.yaml is unavailable; initial adoption fails closed' >&2; exit 1; }
-          go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.6.1 help >/dev/null || { echo 'released sam-harness v0.6.1 is unavailable; release it before enabling secret-bearing CI' >&2; exit 1; }
+          go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.7.0 help >/dev/null || { echo 'released sam-harness v0.7.0 is unavailable; release it before enabling secret-bearing CI' >&2; exit 1; }
       - name: Restore exact triggering run receipts as untrusted data
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -362,7 +404,7 @@ jobs:
           done
           test "$(wc -l < "$receipt_list" | tr -d '[:space:]')" -eq 1 || { echo 'triggering run must contain exactly one failed static, test, or artifact receipt' >&2; exit 1; }
           receipt="$(cat "$receipt_list")"
-          repair_output="$(go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.6.1 repair "${GITHUB_WORKSPACE}/target" --config "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" --receipt "$receipt" --receipt-output true 2>&1)"
+          repair_output="$(go run github.com/samuelfaj/sam-harness/cmd/sam-harness@v0.7.0 repair "${GITHUB_WORKSPACE}/target" --config "${GITHUB_WORKSPACE}/trusted-control/.sam-harness/config.yaml" --receipt "$receipt" --receipt-output true 2>&1)"
           printf '%s\n' "$repair_output"
           repair_receipt="$(printf '%s\n' "$repair_output" | sed -n 's/^Receipt: //p' | tail -n 1)"
           test -n "$repair_receipt"
@@ -378,7 +420,9 @@ jobs:
           esac
           actual_repair_patch_sha256="$(sha256sum "$repair_patch" | awk '{print $1}')"
           test "$actual_repair_patch_sha256" = "$repair_patch_sha256"
-          printf 'repair_patch=%s\nrepair_receipt=%s\n' "$repair_patch" "$repair_receipt" >> "$GITHUB_OUTPUT"
+          repair_html="${repair_receipt%.json}.html"
+          test -f "$repair_html"
+          printf 'repair_patch=%s\nrepair_receipt=%s\nrepair_html=%s\n' "$repair_patch" "$repair_receipt" "$repair_html" >> "$GITHUB_OUTPUT"
       - name: Preserve canonical repair patch and receipt as untrusted data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -387,3 +431,4 @@ jobs:
           path: |
             ${{ steps.repair.outputs.repair_patch }}
             ${{ steps.repair.outputs.repair_receipt }}
+            ${{ steps.repair.outputs.repair_html }}
