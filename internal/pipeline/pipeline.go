@@ -23,6 +23,11 @@ import (
 
 const outputLimit = 32 * 1024
 
+var (
+	progressMu  sync.Mutex
+	progressFD3 = os.NewFile(3, "sam-harness-progress")
+)
+
 type Status string
 
 const (
@@ -1206,6 +1211,10 @@ func executeWithBaseEnvironment(root string, phase model.Phase, spec model.Comma
 }
 
 func executeWithBaseEnvironmentAndSecrets(root string, phase model.Phase, spec model.CommandSpec, stdin []byte, baseEnvironment, env, boundSecrets []string) (execution commandExecution) {
+	return executeCommand(root, phase, spec, stdin, baseEnvironment, env, boundSecrets, commandProgressWriter())
+}
+
+func executeCommand(root string, phase model.Phase, spec model.CommandSpec, stdin []byte, baseEnvironment, env, boundSecrets []string, progress io.Writer) (execution commandExecution) {
 	effectiveEnvironment := mergeEnvironment(baseEnvironment, env)
 	secrets := mergeSensitiveValues(sensitiveEnvironmentValues(effectiveEnvironment), boundSecrets)
 	result := CommandResult{
@@ -1221,10 +1230,16 @@ func executeWithBaseEnvironmentAndSecrets(root string, phase model.Phase, spec m
 		result.Workdir = "."
 	}
 	started := time.Now()
+	writeCommandProgress(progress, phase, spec.Name, "start", 0, secrets)
 	defer func() {
 		result.Output = redactSensitiveValues(result.Output, secrets)
 		result.Duration = time.Since(started)
 		result.FinishedAt = time.Now().UTC()
+		status := "fail"
+		if result.Passed {
+			status = "pass"
+		}
+		writeCommandProgress(progress, phase, spec.Name, status, result.Duration, secrets)
 		execution.result = result
 		execution.secrets = secrets
 	}()
@@ -1291,6 +1306,27 @@ func executeWithBaseEnvironmentAndSecrets(root string, phase model.Phase, spec m
 		result.Output = strings.TrimSpace(result.Output + "\n" + err.Error())
 	}
 	return commandExecution{result: result, stdout: stdoutText, stderr: stderrText}
+}
+
+func commandProgressWriter() io.Writer {
+	if os.Getenv("SAM_HARNESS_PROGRESS_FD") == "3" && progressFD3 != nil {
+		return progressFD3
+	}
+	return os.Stderr
+}
+
+func writeCommandProgress(writer io.Writer, phase model.Phase, name, status string, duration time.Duration, secrets []string) {
+	safeName := strings.Join(strings.Fields(redactSensitiveValues(name, secrets)), " ")
+	if safeName == "" {
+		safeName = "unnamed"
+	}
+	progressMu.Lock()
+	defer progressMu.Unlock()
+	if status == "start" {
+		fmt.Fprintf(writer, "sam-harness: command start phase=%q name=%q\n", phase, safeName)
+		return
+	}
+	fmt.Fprintf(writer, "sam-harness: command %s phase=%q name=%q duration=%s\n", status, phase, safeName, duration.Round(time.Millisecond))
 }
 
 func containedPath(root, relative string) (string, error) {

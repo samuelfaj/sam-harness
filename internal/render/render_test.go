@@ -2,6 +2,7 @@ package render
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1094,6 +1095,11 @@ func TestBuildGitLabRendersLifecycleAndManualTrustedRepairPublisher(t *testing.T
 	if strings.Contains(staticJob, "repair ") || strings.Contains(staticJob, "REPAIR_ENV") || !strings.Contains(staticJob, "artifacts:\n    when: always\n    paths:\n      - .sam-harness/evidence/") || strings.Contains(staticJob, "git push") {
 		t.Fatalf("GitLab static phase received repair or publishing authority:\n%s", staticJob)
 	}
+	for _, expected := range []string{"needs: []", `| tee "$output_file"`, `status="$(cat "$status_file")"`, `sed -n 's/^Receipt: //p' "$output_file"`} {
+		if !strings.Contains(staticJob, expected) {
+			t.Fatalf("GitLab static phase is missing safe live progress control %q:\n%s", expected, staticJob)
+		}
+	}
 	for _, forbidden := range []string{"sam-harness-review:\n", "sam-harness-repair-static:\n", "sam-harness-publish-repair:\n", "OPENAI_API_KEY", "REPAIR_API_KEY", "agent-review"} {
 		if strings.Contains(content, forbidden) {
 			t.Fatalf("GitLab bound-agent MR pipeline contains %q:\n%s", forbidden, content)
@@ -1101,6 +1107,68 @@ func TestBuildGitLabRendersLifecycleAndManualTrustedRepairPublisher(t *testing.T
 	}
 	if strings.Count(content, "  - repair\n") != 1 {
 		t.Fatalf("GitLab repair stage must be declared exactly once:\n%s", content)
+	}
+}
+
+func TestGitLabCapturedPhaseScriptRunsUnderPOSIXShell(t *testing.T) {
+	t.Parallel()
+	receipt := filepath.Join(t.TempDir(), "receipt.json")
+	command := "sh -c " + shellQuote("touch "+shellQuote(receipt)+"; printf 'sam-harness: command start phase=\\\"test\\\" name=\\\"fixture\\\"\\nReceipt: "+receipt+"\\n'; exit 7")
+	script := gitLabCapturedPhaseScript(command)
+	if strings.Contains(script, "PIPESTATUS") || strings.Contains(script, "SAM_HARNESS_PROGRESS_FD") {
+		t.Fatalf("captured phase script is not POSIX portable:\n%s", script)
+	}
+	process := exec.Command("/bin/sh", "-c", script)
+	output, err := process.CombinedOutput()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 7 {
+		t.Fatalf("captured phase exit = %v, want 7; output:\n%s", err, output)
+	}
+	for _, expected := range []string{"sam-harness: command start", "Receipt: " + receipt} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("captured phase output missing %q:\n%s", expected, output)
+		}
+	}
+}
+
+func TestBuildGitLabRunsIndependentGatesInParallelAndJoinsThemAtArtifact(t *testing.T) {
+	t.Parallel()
+	approved := productionAnswers()
+	approved.CISecretBindings = nil
+	approved.CISecretWaivers = map[string]string{"github": "agents need no provider secret", "gitlab": "agents need no provider secret"}
+	delete(approved.AgentControlPlanes, "gitlab")
+	content := operationContent(t, buildProductionOperationsWithAnswers(t, t.TempDir(), approved), ".sam-harness/ci/gitlab.yml")
+
+	for _, bounds := range [][2]string{
+		{"sam-harness-static:\n", "sam-harness-test:\n"},
+		{"sam-harness-test:\n", "sam-harness-review:\n"},
+		{"sam-harness-review:\n", "sam-harness-artifact:\n"},
+	} {
+		section := contentSection(t, content, bounds[0], bounds[1])
+		if !strings.Contains(section, "  needs: []\n") {
+			t.Fatalf("GitLab gate %q is not independent:\n%s", bounds[0], section)
+		}
+	}
+
+	artifact := contentSection(t, content, "sam-harness-artifact:\n", "sam-harness-repair-static:\n")
+	for _, gate := range []string{"sam-harness-static", "sam-harness-test", "sam-harness-review"} {
+		if !strings.Contains(artifact, "    - job: "+gate+"\n      artifacts: true\n") {
+			t.Fatalf("artifact does not explicitly wait for %s:\n%s", gate, artifact)
+		}
+	}
+	if strings.Index(artifact, "job: sam-harness-static") > strings.Index(artifact, "job: sam-harness-test") || strings.Index(artifact, "job: sam-harness-test") > strings.Index(artifact, "job: sam-harness-review") {
+		t.Fatalf("artifact gate order is not deterministic:\n%s", artifact)
+	}
+
+	external := operationContent(t, buildProductionOperations(t, t.TempDir()), ".sam-harness/ci/gitlab.yml")
+	externalArtifact := contentSection(t, external, "sam-harness-artifact:\n", "sam-harness-staging:\n")
+	for _, gate := range []string{"sam-harness-static", "sam-harness-test"} {
+		if !strings.Contains(externalArtifact, "    - job: "+gate+"\n      artifacts: true\n") {
+			t.Fatalf("externally reviewed artifact does not wait for %s:\n%s", gate, externalArtifact)
+		}
+	}
+	if strings.Contains(externalArtifact, "job: sam-harness-review") {
+		t.Fatalf("externally reviewed artifact waits for a local review job:\n%s", externalArtifact)
 	}
 }
 

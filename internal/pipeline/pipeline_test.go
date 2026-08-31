@@ -10,12 +10,36 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/samuelfaj/sam-harness/internal/config"
 	"github.com/samuelfaj/sam-harness/internal/model"
 )
+
+type progressProbe struct {
+	mu      sync.Mutex
+	buffer  bytes.Buffer
+	started chan struct{}
+	once    sync.Once
+}
+
+func (probe *progressProbe) Write(value []byte) (int, error) {
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	written, err := probe.buffer.Write(value)
+	if bytes.Contains(value, []byte("command start")) {
+		probe.once.Do(func() { close(probe.started) })
+	}
+	return written, err
+}
+
+func (probe *progressProbe) String() string {
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	return probe.buffer.String()
+}
 
 func TestPhaseExecutionWritesCanonicalReceiptAndRejectsEscapingWorkdir(t *testing.T) {
 	root := t.TempDir()
@@ -76,6 +100,88 @@ printf 'static ran\n'
 	}, nil, nil)
 	if execution.result.Passed || !strings.Contains(execution.result.Output, "escapes root") {
 		t.Fatalf("escaping command was not blocked: %#v", execution.result)
+	}
+}
+
+func TestExecuteEmitsSanitizedProgressWithoutStreamingCommandOutput(t *testing.T) {
+	root := t.TempDir()
+	var progress bytes.Buffer
+	execution := executeCommand(root, model.PhaseTest, model.CommandSpec{
+		Name:     "safe super-secret\ninjected",
+		Workdir:  ".",
+		Command:  []string{"sh", "-c", "printf 'raw super-secret'; exit 7"},
+		Required: true,
+	}, nil, []string{"PATH=" + os.Getenv("PATH"), "TOKEN=super-secret"}, nil, nil, &progress)
+
+	if execution.result.Passed || execution.result.ExitCode != 7 {
+		t.Fatalf("execution = %#v", execution.result)
+	}
+	success := executeCommand(root, model.PhaseTest, model.CommandSpec{
+		Name:     "success",
+		Workdir:  ".",
+		Command:  []string{"sh", "-c", "printf 'raw success'"},
+		Required: true,
+	}, nil, []string{"PATH=" + os.Getenv("PATH")}, nil, nil, &progress)
+	if !success.result.Passed || success.result.ExitCode != 0 {
+		t.Fatalf("success execution = %#v", success.result)
+	}
+	output := progress.String()
+	for _, expected := range []string{
+		`sam-harness: command start phase="test" name="safe [REDACTED] injected"`,
+		`sam-harness: command fail phase="test" name="safe [REDACTED] injected" duration=`,
+		`sam-harness: command pass phase="test" name="success" duration=`,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("progress missing %q:\n%s", expected, output)
+		}
+	}
+	for _, forbidden := range []string{"super-secret", "raw super-secret", "raw success", "\ninjected\n"} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("progress exposed %q:\n%s", forbidden, output)
+		}
+	}
+}
+
+func TestExecuteEmitsStartBeforeCommandCompletes(t *testing.T) {
+	root := t.TempDir()
+	progress := &progressProbe{started: make(chan struct{})}
+	done := make(chan commandExecution, 1)
+	go func() {
+		done <- executeCommand(root, model.PhaseTest, model.CommandSpec{
+			Name:     "delayed super-secret",
+			Workdir:  ".",
+			Command:  []string{"sh", "-c", "sleep 1; printf 'raw super-secret'"},
+			Required: true,
+		}, nil, []string{"PATH=" + os.Getenv("PATH"), "TOKEN=super-secret"}, nil, nil, progress)
+	}()
+
+	select {
+	case <-progress.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("start progress was not observable while the command was running")
+	}
+	select {
+	case <-done:
+		t.Fatal("command finished before start progress could be observed")
+	default:
+	}
+	visible := progress.String()
+	if !strings.Contains(visible, `command start phase="test" name="delayed [REDACTED]"`) {
+		t.Fatalf("start progress missing or unsanitized:\n%s", visible)
+	}
+	for _, forbidden := range []string{"super-secret", "raw super-secret"} {
+		if strings.Contains(visible, forbidden) {
+			t.Fatalf("live progress exposed %q:\n%s", forbidden, visible)
+		}
+	}
+
+	select {
+	case execution := <-done:
+		if !execution.result.Passed {
+			t.Fatalf("execution = %#v", execution.result)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("command did not finish")
 	}
 }
 
