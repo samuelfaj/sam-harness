@@ -834,6 +834,7 @@ func answersFromConfig(cfg model.Config) model.Answers {
 	production := cfg.Profile == model.ProfileProduction || cfg.Profile == model.ProfileRegulated
 	irreversible := false
 	allowCI := cfg.CI.Managed
+	gitLabExternalPipelinePolicy := cfg.CI.GitLabExternalPipelinePolicy
 	actions := make([]string, 0, 6)
 	for _, item := range []struct {
 		name    string
@@ -863,33 +864,34 @@ func answersFromConfig(cfg model.Config) model.Answers {
 		}
 	}
 	return model.Answers{
-		Criticality:             cfg.Governance.Criticality,
-		DataSensitivity:         cfg.Governance.DataSensitivity,
-		DeploysToProduction:     &production,
-		PersistentData:          &cfg.Migration.Required,
-		IrreversibleActions:     &irreversible,
-		DesignSourceOfTruth:     cfg.Design.SourceOfTruth,
-		Approvers:               append([]string(nil), cfg.Governance.Approvers...),
-		AllowCIChanges:          &allowCI,
-		CIProviders:             append([]string(nil), cfg.CI.Providers...),
-		AllowedActions:          &actions,
-		CommandOverrides:        commandOverrides,
-		CommandWaivers:          cloneStringMap(cfg.Governance.CommandWaivers),
-		CISetupCommands:         cloneSetupCommands(cfg.CI.SetupCommands),
-		CISetupWaivers:          cloneStringMap(cfg.CI.SetupWaivers),
-		CISecretBindings:        cloneCISecretBindings(cfg.CI.SecretBindings),
-		CISecretWaivers:         cloneStringMap(cfg.CI.SecretWaivers),
-		AgentSecretEnvironments: cloneStringMap(cfg.CI.AgentSecretEnvironments),
-		AgentControlPlanes:      cloneAgentControlPlanes(cfg.CI.AgentControlPlanes),
-		CIAgentRuntime:          cfg.CI.AgentRuntime.Clone(),
-		StandardizeCommits:      cfg.Governance.StandardizeCommits,
-		GitLabImage:             cfg.CI.GitLabImage,
-		RiskAcceptance:          cfg.Governance.RiskAcceptance,
-		ObservationWindow:       cfg.Release.ObservationWindow,
-		RollbackOwner:           cfg.Release.RollbackOwner,
-		ProductionEnvironment:   cfg.Release.ProductionEnvironment,
-		Workflow:                cloneWorkflow(cfg.Workflow),
-		AdoptionPhase:           workflowAdoptionPhase(cfg.Workflow),
+		Criticality:                  cfg.Governance.Criticality,
+		DataSensitivity:              cfg.Governance.DataSensitivity,
+		DeploysToProduction:          &production,
+		PersistentData:               &cfg.Migration.Required,
+		IrreversibleActions:          &irreversible,
+		DesignSourceOfTruth:          cfg.Design.SourceOfTruth,
+		Approvers:                    append([]string(nil), cfg.Governance.Approvers...),
+		AllowCIChanges:               &allowCI,
+		CIProviders:                  append([]string(nil), cfg.CI.Providers...),
+		AllowedActions:               &actions,
+		CommandOverrides:             commandOverrides,
+		CommandWaivers:               cloneStringMap(cfg.Governance.CommandWaivers),
+		CISetupCommands:              cloneSetupCommands(cfg.CI.SetupCommands),
+		CISetupWaivers:               cloneStringMap(cfg.CI.SetupWaivers),
+		CISecretBindings:             cloneCISecretBindings(cfg.CI.SecretBindings),
+		CISecretWaivers:              cloneStringMap(cfg.CI.SecretWaivers),
+		AgentSecretEnvironments:      cloneStringMap(cfg.CI.AgentSecretEnvironments),
+		AgentControlPlanes:           cloneAgentControlPlanes(cfg.CI.AgentControlPlanes),
+		CIAgentRuntime:               cfg.CI.AgentRuntime.Clone(),
+		StandardizeCommits:           cfg.Governance.StandardizeCommits,
+		GitLabImage:                  cfg.CI.GitLabImage,
+		GitLabExternalPipelinePolicy: &gitLabExternalPipelinePolicy,
+		RiskAcceptance:               cfg.Governance.RiskAcceptance,
+		ObservationWindow:            cfg.Release.ObservationWindow,
+		RollbackOwner:                cfg.Release.RollbackOwner,
+		ProductionEnvironment:        cfg.Release.ProductionEnvironment,
+		Workflow:                     cloneWorkflow(cfg.Workflow),
+		AdoptionPhase:                workflowAdoptionPhase(cfg.Workflow),
 	}
 }
 
@@ -1003,6 +1005,9 @@ func mergeAnswers(base, provided model.Answers) model.Answers {
 	}
 	if provided.GitLabImage != "" {
 		base.GitLabImage = provided.GitLabImage
+	}
+	if provided.GitLabExternalPipelinePolicy != nil {
+		base.GitLabExternalPipelinePolicy = provided.GitLabExternalPipelinePolicy
 	}
 	if provided.RiskAcceptance != "" {
 		base.RiskAcceptance = provided.RiskAcceptance

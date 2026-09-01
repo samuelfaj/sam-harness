@@ -210,17 +210,18 @@ func buildConfig(scan model.ScanResult, profile model.Profile, answers model.Ans
 			},
 		},
 		CI: model.CIConfig{
-			Providers:                append([]string(nil), scan.CIProviders...),
-			Managed:                  ciManaged,
-			BranchProtectionRequired: production,
-			SetupCommands:            cloneSetupCommands(answers.CISetupCommands),
-			SetupWaivers:             cloneWaivers(answers.CISetupWaivers),
-			SecretBindings:           cloneSecretBindings(answers.CISecretBindings),
-			SecretWaivers:            cloneWaivers(answers.CISecretWaivers),
-			AgentSecretEnvironments:  cloneWaivers(answers.AgentSecretEnvironments),
-			AgentControlPlanes:       cloneAgentControlPlanes(answers.AgentControlPlanes),
-			AgentRuntime:             agentRuntimeForConfig(answers),
-			GitLabImage:              answers.GitLabImage,
+			Providers:                    append([]string(nil), scan.CIProviders...),
+			Managed:                      ciManaged,
+			BranchProtectionRequired:     production,
+			SetupCommands:                cloneSetupCommands(answers.CISetupCommands),
+			SetupWaivers:                 cloneWaivers(answers.CISetupWaivers),
+			SecretBindings:               cloneSecretBindings(answers.CISecretBindings),
+			SecretWaivers:                cloneWaivers(answers.CISecretWaivers),
+			AgentSecretEnvironments:      cloneWaivers(answers.AgentSecretEnvironments),
+			AgentControlPlanes:           cloneAgentControlPlanes(answers.AgentControlPlanes),
+			AgentRuntime:                 agentRuntimeForConfig(answers),
+			GitLabImage:                  answers.GitLabImage,
+			GitLabExternalPipelinePolicy: answers.GitLabExternalPipelinePolicy != nil && *answers.GitLabExternalPipelinePolicy,
 		},
 		Release: model.ReleaseConfig{
 			ImmutableArtifact:     production,
@@ -2284,6 +2285,9 @@ func writeGitLabPhaseJob(builder *strings.Builder, cfg model.Config, job string,
 	builder.WriteString("  rules:\n")
 	if (phase == model.PhaseReview || deploymentPhase(phase)) && !phaseAuthorizedForCI(cfg, phase) {
 		builder.WriteString("    - when: never # Required network, deploy, or release authority is not granted; keep this job structurally inactive.\n")
+	} else if cfg.CI.GitLabExternalPipelinePolicy &&
+		(phase == model.PhaseStatic || phase == model.PhaseTest || phase == model.PhaseArtifact) {
+		builder.WriteString("    - if: '$CI_PIPELINE_SOURCE == \"merge_request_event\"'\n      when: never # Protected external policy owns merge-request gates.\n    - if: '$CI_COMMIT_BRANCH'\n")
 	} else if defaultBranchOnly {
 		builder.WriteString("    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'\n")
 	} else {

@@ -135,6 +135,12 @@ func validateSemantics(cfg model.Config) error {
 	for _, provider := range cfg.CI.Providers {
 		providerSet[provider] = true
 	}
+	if cfg.CI.GitLabExternalPipelinePolicy {
+		control, ok := cfg.CI.AgentControlPlanes["gitlab"]
+		if !providerSet["gitlab"] || !ok || control.Mode != model.AgentControlPlaneModeExternal {
+			return fmt.Errorf("validate config: gitlab_external_pipeline_policy requires the GitLab external agent control plane")
+		}
+	}
 	for provider, setups := range cfg.CI.SetupCommands {
 		if !providerSet[provider] || len(setups) == 0 || strings.TrimSpace(cfg.CI.SetupWaivers[provider]) != "" {
 			return fmt.Errorf("validate config: invalid CI setup for %s", provider)

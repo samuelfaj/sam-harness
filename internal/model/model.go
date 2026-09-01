@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-var HarnessVersion = "0.7.3"
+var HarnessVersion = "0.7.4"
 
 const SchemaVersion = "1"
 
@@ -224,40 +224,41 @@ type ScanResult struct {
 }
 
 type Answers struct {
-	Criticality             string                         `json:"criticality"`
-	DataSensitivity         string                         `json:"data_sensitivity"`
-	DeploysToProduction     *bool                          `json:"deploys_to_production"`
-	PersistentData          *bool                          `json:"persistent_data"`
-	IrreversibleActions     *bool                          `json:"irreversible_actions"`
-	DesignSourceOfTruth     string                         `json:"design_source_of_truth,omitempty"`
-	Approvers               []string                       `json:"approvers"`
-	AllowCIChanges          *bool                          `json:"allow_ci_changes"`
-	CIProviders             []string                       `json:"ci_providers,omitempty"`
-	AllowedActions          *[]string                      `json:"allowed_actions"`
-	CommandOverrides        map[string]map[string][]string `json:"command_overrides,omitempty"`
-	CommandWaivers          map[string]string              `json:"command_waivers,omitempty"`
-	CISetupCommands         map[string][]SetupCommand      `json:"ci_setup_commands,omitempty"`
-	CISetupWaivers          map[string]string              `json:"ci_setup_waivers,omitempty"`
-	CISecretBindings        map[string][]CISecretBinding   `json:"ci_secret_bindings,omitempty"`
-	CISecretWaivers         map[string]string              `json:"ci_secret_waivers,omitempty"`
-	AgentSecretEnvironments map[string]string              `json:"agent_secret_environments,omitempty"`
-	AgentControlPlanes      map[string]AgentControlPlane   `json:"agent_control_planes,omitempty"`
-	CIAgentRuntime          *CIAgentRuntime                `json:"ci_agent_runtime,omitempty"`
-	StandardizeCommits      *bool                          `json:"standardize_commits,omitempty"`
-	GitLabImage             string                         `json:"gitlab_image,omitempty"`
-	RiskAcceptance          string                         `json:"risk_acceptance,omitempty"`
-	ObservationWindow       string                         `json:"observation_window,omitempty"`
-	RollbackOwner           string                         `json:"rollback_owner,omitempty"`
-	ProductionEnvironment   string                         `json:"production_environment,omitempty"`
-	Workflow                *WorkflowConfig                `json:"workflow,omitempty"`
-	AdoptionPhase           string                         `json:"adoption_phase,omitempty"`
-	ConfirmGuardDefaults    []string                       `json:"confirm_guard_defaults,omitempty"`
-	ConfirmRuntimeReviewers *bool                          `json:"confirm_runtime_reviewers,omitempty"`
-	ReviewTimeoutSeconds    int                            `json:"review_timeout_seconds,omitempty"`
-	BrowserCommand          []string                       `json:"browser_command,omitempty"`
-	BrowserWaiver           string                         `json:"browser_waiver,omitempty"`
-	AccessibilityCommand    []string                       `json:"accessibility_command,omitempty"`
-	AccessibilityWaiver     string                         `json:"accessibility_waiver,omitempty"`
+	Criticality                  string                         `json:"criticality"`
+	DataSensitivity              string                         `json:"data_sensitivity"`
+	DeploysToProduction          *bool                          `json:"deploys_to_production"`
+	PersistentData               *bool                          `json:"persistent_data"`
+	IrreversibleActions          *bool                          `json:"irreversible_actions"`
+	DesignSourceOfTruth          string                         `json:"design_source_of_truth,omitempty"`
+	Approvers                    []string                       `json:"approvers"`
+	AllowCIChanges               *bool                          `json:"allow_ci_changes"`
+	CIProviders                  []string                       `json:"ci_providers,omitempty"`
+	AllowedActions               *[]string                      `json:"allowed_actions"`
+	CommandOverrides             map[string]map[string][]string `json:"command_overrides,omitempty"`
+	CommandWaivers               map[string]string              `json:"command_waivers,omitempty"`
+	CISetupCommands              map[string][]SetupCommand      `json:"ci_setup_commands,omitempty"`
+	CISetupWaivers               map[string]string              `json:"ci_setup_waivers,omitempty"`
+	CISecretBindings             map[string][]CISecretBinding   `json:"ci_secret_bindings,omitempty"`
+	CISecretWaivers              map[string]string              `json:"ci_secret_waivers,omitempty"`
+	AgentSecretEnvironments      map[string]string              `json:"agent_secret_environments,omitempty"`
+	AgentControlPlanes           map[string]AgentControlPlane   `json:"agent_control_planes,omitempty"`
+	CIAgentRuntime               *CIAgentRuntime                `json:"ci_agent_runtime,omitempty"`
+	StandardizeCommits           *bool                          `json:"standardize_commits,omitempty"`
+	GitLabImage                  string                         `json:"gitlab_image,omitempty"`
+	GitLabExternalPipelinePolicy *bool                          `json:"gitlab_external_pipeline_policy,omitempty"`
+	RiskAcceptance               string                         `json:"risk_acceptance,omitempty"`
+	ObservationWindow            string                         `json:"observation_window,omitempty"`
+	RollbackOwner                string                         `json:"rollback_owner,omitempty"`
+	ProductionEnvironment        string                         `json:"production_environment,omitempty"`
+	Workflow                     *WorkflowConfig                `json:"workflow,omitempty"`
+	AdoptionPhase                string                         `json:"adoption_phase,omitempty"`
+	ConfirmGuardDefaults         []string                       `json:"confirm_guard_defaults,omitempty"`
+	ConfirmRuntimeReviewers      *bool                          `json:"confirm_runtime_reviewers,omitempty"`
+	ReviewTimeoutSeconds         int                            `json:"review_timeout_seconds,omitempty"`
+	BrowserCommand               []string                       `json:"browser_command,omitempty"`
+	BrowserWaiver                string                         `json:"browser_waiver,omitempty"`
+	AccessibilityCommand         []string                       `json:"accessibility_command,omitempty"`
+	AccessibilityWaiver          string                         `json:"accessibility_waiver,omitempty"`
 }
 
 func (a Answers) Missing(scan ScanResult) []string {
@@ -416,17 +417,18 @@ type AgentControlPlane struct {
 }
 
 type CIConfig struct {
-	Providers                []string                     `json:"providers" yaml:"providers"`
-	Managed                  bool                         `json:"managed" yaml:"managed"`
-	BranchProtectionRequired bool                         `json:"branch_protection_required" yaml:"branch_protection_required"`
-	SetupCommands            map[string][]SetupCommand    `json:"setup_commands,omitempty" yaml:"setup_commands,omitempty"`
-	SetupWaivers             map[string]string            `json:"setup_waivers,omitempty" yaml:"setup_waivers,omitempty"`
-	SecretBindings           map[string][]CISecretBinding `json:"secret_bindings,omitempty" yaml:"secret_bindings,omitempty"`
-	SecretWaivers            map[string]string            `json:"secret_waivers,omitempty" yaml:"secret_waivers,omitempty"`
-	AgentSecretEnvironments  map[string]string            `json:"agent_secret_environments,omitempty" yaml:"agent_secret_environments,omitempty"`
-	AgentControlPlanes       map[string]AgentControlPlane `json:"agent_control_planes,omitempty" yaml:"agent_control_planes,omitempty"`
-	AgentRuntime             *CIAgentRuntime              `json:"agent_runtime,omitempty" yaml:"agent_runtime,omitempty"`
-	GitLabImage              string                       `json:"gitlab_image,omitempty" yaml:"gitlab_image,omitempty"`
+	Providers                    []string                     `json:"providers" yaml:"providers"`
+	Managed                      bool                         `json:"managed" yaml:"managed"`
+	BranchProtectionRequired     bool                         `json:"branch_protection_required" yaml:"branch_protection_required"`
+	SetupCommands                map[string][]SetupCommand    `json:"setup_commands,omitempty" yaml:"setup_commands,omitempty"`
+	SetupWaivers                 map[string]string            `json:"setup_waivers,omitempty" yaml:"setup_waivers,omitempty"`
+	SecretBindings               map[string][]CISecretBinding `json:"secret_bindings,omitempty" yaml:"secret_bindings,omitempty"`
+	SecretWaivers                map[string]string            `json:"secret_waivers,omitempty" yaml:"secret_waivers,omitempty"`
+	AgentSecretEnvironments      map[string]string            `json:"agent_secret_environments,omitempty" yaml:"agent_secret_environments,omitempty"`
+	AgentControlPlanes           map[string]AgentControlPlane `json:"agent_control_planes,omitempty" yaml:"agent_control_planes,omitempty"`
+	AgentRuntime                 *CIAgentRuntime              `json:"agent_runtime,omitempty" yaml:"agent_runtime,omitempty"`
+	GitLabImage                  string                       `json:"gitlab_image,omitempty" yaml:"gitlab_image,omitempty"`
+	GitLabExternalPipelinePolicy bool                         `json:"gitlab_external_pipeline_policy,omitempty" yaml:"gitlab_external_pipeline_policy,omitempty"`
 }
 
 type ReleaseConfig struct {
