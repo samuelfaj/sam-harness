@@ -130,6 +130,8 @@ sam-harness pipeline /caminho/do/repositorio --phase observe --receipt true
 
 `--review-base`, `--review-base-sha` e `--review-head-sha` só são válidos com `review` ou `all`; os flags de SHA precisam aparecer juntos e exigem o diretório-base. Review com secrets exige os três. Os SHAs hexadecimais de 40 ou 64 caracteres precisam corresponder ao `HEAD` dos checkouts de base e alvo antes e depois do review. O recibo registra `review_base_root`, `review_base_sha`, `review_base_fingerprint`, `review_head_sha`, `review_head_fingerprint`, o artefato `review_patch` canônico e `review_patch_sha256`; os prompts dos reviewers carregam somente `review_patch_path` e `review_patch_sha256`, para que leiam o diff não confiável no sandbox isolado sem embutir seus bytes. Qualquer mudança de identidade ou conteúdo bloqueia. Um review local somente do head, sem `--review-base`, ainda pode ser útil, mas não satisfaz o gate pré-merge obrigatório sobre o delta.
 
+A convergência do review segue uma política fixa: a passagem inicial revisa o diff completo do MR entre base e head e congela seu manifesto; as passagens posteriores revalidam esses findings congelados pelos IDs do mesmo reviewer; somente um novo P0/P1 comprovado no delta de correção entre o head anterior e o atual pode entrar no ledger bloqueante. Novos P2/P3 e problemas preexistentes não relacionados não iniciam outro loop de correção. Findings iniciais e novas regressões P0/P1 precisam apontar uma linha adicionada ou modificada no patch aplicável, ou a linha `0` somente para evidência de arquivo com apenas remoção, arquivo excluído ou renomeação pura. Falta de prova bloqueia. Cada recibo JSON possui um HTML independente e escapado ao lado.
+
 `--phase all` é conveniente em uma automação já aprovada, mas não dispensa a proteção do ambiente de produção nem a aprovação manual; forneça o diretório-base e o par de SHAs quando `all` precisar satisfazer review pré-merge com secrets do provedor. Rollback nunca faz parte de `all` nem começa automaticamente depois de uma falha; use sua entrada manual independente apenas quando houver runbook e autoridade correspondentes:
 
 ```bash
@@ -149,7 +151,7 @@ Se a publicação de change request estiver habilitada e autorizada separadament
 Para atualizar uma instalação legada de produção, informe as decisões obrigatórias do workflow da versão atual em um arquivo de respostas:
 
 ```bash
-sam-harness upgrade /caminho/do/repositorio --to 0.7.5 --answers /tmp/sam-harness-respostas-v0.7.json
+sam-harness upgrade /caminho/do/repositorio --to 0.7.6 --answers /tmp/sam-harness-respostas-v0.7.json
 ```
 
 `upgrade` combina as respostas explícitas com a configuração instalada e produz um plano com expiração; ele não aplica o plano. Revise decisões pendentes e todas as operações, depois aprove e aplique o novo ID exato. Use o [formato da configuração do workflow](../skills/sam-harness/references/workflow-configuration.md) para a cobertura de guards `static`/`test`, as decisões sobre nomes de secrets, ambiente protegido dos agentes e control plane do provedor, as atestações de filesystem e de comando confiável, e os comandos de ciclo que uma configuração legada de produção v0.1 não contém.

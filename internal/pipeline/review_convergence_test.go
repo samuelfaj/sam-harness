@@ -181,7 +181,7 @@ func TestReviewConvergenceRequiresExplicitIDForFrozenActionCollision(t *testing.
 	}
 }
 
-func TestReviewConvergenceLineHunkRegressionRequiresChangedCurrentLine(t *testing.T) {
+func TestReviewConvergenceOnlyNewP0P1InCorrectionDeltaBlock(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "changed.go"), []byte("one\ntwo\nthree\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -193,19 +193,26 @@ func TestReviewConvergenceLineHunkRegressionRequiresChangedCurrentLine(t *testin
 	currentHead := initializeTestGit(t, root)
 	prior := convergenceTestReceipt(t, root, priorHead, convergenceTestFinding(model.ReviewerSecurity, "P1", "old.go", 1))
 	for name, scenario := range map[string]struct {
+		severity       string
 		line           int
 		wantRegression bool
-	}{"changed line": {line: 2, wantRegression: true}, "unchanged line": {line: 1, wantRegression: false}} {
+	}{
+		"P0 on changed line":   {severity: "P0", line: 2, wantRegression: true},
+		"P1 on changed line":   {severity: "P1", line: 2, wantRegression: true},
+		"P2 on changed line":   {severity: "P2", line: 2, wantRegression: false},
+		"P3 on changed line":   {severity: "P3", line: 2, wantRegression: false},
+		"P1 on unchanged line": {severity: "P1", line: 1, wantRegression: false},
+	} {
 		t.Run(name, func(t *testing.T) {
 			line := scenario.line
 			wantRegression := scenario.wantRegression
-			current := Receipt{ReviewHeadSHA: currentHead, ReviewHeadFingerprint: strings.Repeat("f", sha256.Size*2), ReviewLineageSHA256: strings.Repeat("1", 64), Findings: []Finding{convergenceTestFinding(model.ReviewerCorrectness, "P1", "changed.go", line)}}
+			current := Receipt{ReviewHeadSHA: currentHead, ReviewHeadFingerprint: strings.Repeat("f", sha256.Size*2), ReviewLineageSHA256: strings.Repeat("1", 64), Findings: []Finding{convergenceTestFinding(model.ReviewerCorrectness, scenario.severity, "changed.go", line)}}
 			err := classifyReviewConvergence(root, prior, &current)
 			if wantRegression && err == nil {
-				t.Fatal("changed-hunk P1 regression was accepted")
+				t.Fatalf("changed-hunk %s regression was accepted", scenario.severity)
 			}
 			if !wantRegression && (err != nil || len(current.RegressionFindingIDs) != 0 || current.Findings[0].Status != findingStatusRecorded) {
-				t.Fatalf("out-of-hunk P1 was treated as regression: err=%v receipt=%#v", err, current)
+				t.Fatalf("non-blocking %s finding was treated as regression: err=%v receipt=%#v", scenario.severity, err, current)
 			}
 		})
 	}

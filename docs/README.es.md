@@ -130,6 +130,8 @@ sam-harness pipeline /ruta/al/repositorio --phase observe --receipt true
 
 `--review-base`, `--review-base-sha` y `--review-head-sha` solo son válidos con `review` o `all`; los flags de SHA deben aparecer juntos y requieren el directorio base. La revisión con secretos exige los tres. Los SHA hexadecimales de 40 o 64 caracteres deben coincidir con el `HEAD` de los checkouts base y objetivo antes y después de la revisión. El recibo registra `review_base_root`, `review_base_sha`, `review_base_fingerprint`, `review_head_sha`, `review_head_fingerprint`, el artefacto `review_patch` canónico y `review_patch_sha256`; los prompts de los revisores solo llevan `review_patch_path` y `review_patch_sha256`, para que lean el diff no confiable desde el sandbox aislado sin incrustar sus bytes. Cualquier cambio de identidad o contenido bloquea. Una revisión local solo del head, sin `--review-base`, puede seguir siendo útil, pero no satisface el gate pre-merge obligatorio sobre el delta.
 
+La convergencia de la revisión sigue una política fija: la pasada inicial revisa el diff completo del MR entre base y head y congela su manifiesto; las pasadas posteriores revalidan esos hallazgos congelados mediante los ID del mismo revisor; solo un nuevo P0/P1 probado en el delta de corrección entre el head anterior y el actual puede entrar en el registro bloqueante. Los nuevos P2/P3 y los problemas preexistentes no relacionados no inician otro ciclo de corrección. Los hallazgos iniciales y las nuevas regresiones P0/P1 deben señalar una línea añadida o modificada en el parche aplicable, o la línea `0` solo para evidencia de archivo con solo eliminaciones, archivo eliminado o renombrado puro. La falta de prueba bloquea. Cada recibo JSON tiene a su lado un HTML independiente y escapado.
+
 `--phase all` es útil en una automatización ya aprobada, pero no elimina la protección del entorno de producción ni la aprobación manual; proporciona el directorio base y el par de SHA cuando `all` deba satisfacer una revisión pre-merge con secretos del proveedor. Rollback nunca forma parte de `all` ni comienza automáticamente después de un fallo; usa su entrada manual independiente solo cuando correspondan el runbook y la autoridad:
 
 ```bash
@@ -149,7 +151,7 @@ Si la publicación de change requests está habilitada y autorizada por separado
 Para actualizar una instalación de producción heredada, proporciona las decisiones obligatorias del workflow de la versión actual en un archivo de respuestas:
 
 ```bash
-sam-harness upgrade /ruta/al/repositorio --to 0.7.5 --answers /tmp/sam-harness-respuestas-v0.7.json
+sam-harness upgrade /ruta/al/repositorio --to 0.7.6 --answers /tmp/sam-harness-respuestas-v0.7.json
 ```
 
 `upgrade` combina las respuestas explícitas con la configuración instalada y produce un plan con caducidad; no lo aplica. Revisa las decisiones pendientes y todas las operaciones, después aprueba y aplica el nuevo ID exacto. Usa la [estructura de configuración del workflow](../skills/sam-harness/references/workflow-configuration.md) para la cobertura de guards `static`/`test`, las decisiones sobre nombres de secretos, entorno protegido de agentes y control plane del proveedor, las atestaciones del filesystem y del comando confiable, y los comandos del ciclo que una configuración heredada de producción v0.1 no contiene.
