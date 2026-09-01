@@ -123,6 +123,7 @@ type Receipt struct {
 	FinishedAt                time.Time         `json:"finished_at"`
 	Commands                  []CommandResult   `json:"commands,omitempty"`
 	Findings                  []Finding         `json:"findings,omitempty"`
+	ExcludedFindings          []Finding         `json:"excluded_findings,omitempty"`
 	Artifact                  *ArtifactEvidence `json:"artifact,omitempty"`
 	Phases                    []PhaseResult     `json:"phases,omitempty"`
 	Attempts                  []RepairAttempt   `json:"attempts,omitempty"`
@@ -274,6 +275,7 @@ func RunWithOptions(path string, phase model.Phase, writeReceipt bool, options R
 		})
 		receipt.Commands = append(receipt.Commands, phaseReceipt.Commands...)
 		receipt.Findings = append(receipt.Findings, phaseReceipt.Findings...)
+		receipt.ExcludedFindings = append(receipt.ExcludedFindings, phaseReceipt.ExcludedFindings...)
 		if current == model.PhaseReview {
 			receipt.ReviewBaseRoot = phaseReceipt.ReviewBaseRoot
 			receipt.ReviewBaseSHA = phaseReceipt.ReviewBaseSHA
@@ -931,15 +933,28 @@ func runReview(root string, cfg model.Config, context phaseContext, receipt *Rec
 	} else {
 		receipt.ReviewConvergence = reviewConvergenceInitial
 		if reviewComplete {
-			if conflicts := Arbitrate(receipt.Findings); len(conflicts) > 0 {
-				receipt.Status = StatusBlocked
-				receipt.ArbiterBlocked = true
-				receipt.ArbiterReason = "conflicting independent findings: " + strings.Join(conflicts, ", ")
-				return errors.New("review blocked until conflicting independent findings are resolved")
+			if change.baseRoot == "" {
+				if conflicts := Arbitrate(receipt.Findings); len(conflicts) > 0 {
+					receipt.Status = StatusBlocked
+					receipt.ArbiterBlocked = true
+					receipt.ArbiterReason = "conflicting independent findings: " + strings.Join(conflicts, ", ")
+					return errors.New("review blocked until conflicting independent findings are resolved")
+				}
 			}
-			if err := validateInitialFindingHunks(receipt.Findings, change); err != nil {
+			scoped, excluded, scopeErr := scopeInitialFindings(receipt.Findings, change, receipt.ReviewLineageSHA256)
+			if scopeErr != nil {
 				receipt.Status = StatusBlocked
-				return err
+				return scopeErr
+			}
+			receipt.ExcludedFindings = append(receipt.ExcludedFindings, excluded...)
+			receipt.Findings = scoped
+			if change.baseRoot != "" {
+				if conflicts := Arbitrate(receipt.Findings); len(conflicts) > 0 {
+					receipt.Status = StatusBlocked
+					receipt.ArbiterBlocked = true
+					receipt.ArbiterReason = "conflicting independent findings: " + strings.Join(conflicts, ", ")
+					return errors.New("review blocked until conflicting independent findings are resolved")
+				}
 			}
 		}
 		for _, finding := range receipt.Findings {
