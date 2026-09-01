@@ -107,6 +107,12 @@ func (c *CLI) scan(args []string) error {
 		}
 	}
 	fmt.Fprintf(c.Stdout, "CI providers: %s\n", valueOr(strings.Join(result.CIProviders, ", "), "none detected"))
+	if len(result.CICommands) > 0 {
+		fmt.Fprintln(c.Stdout, "Existing CI commands:")
+		for _, command := range result.CICommands {
+			fmt.Fprintf(c.Stdout, "  - %s %s/%s in %s: %s\n", command.Provider, command.File, command.Job, command.Workdir, strings.Join(command.Command, " "))
+		}
+	}
 	fmt.Fprintf(c.Stdout, "UI: %t\nPersistence: %t\nDeployment: %t\n", result.HasUI, result.HasPersistence, result.HasDeployment)
 	return nil
 }
@@ -140,6 +146,12 @@ func (c *CLI) plan(args []string) error {
 		}{PlanFile: path, Plan: plan})
 	}
 	fmt.Fprintf(c.Stdout, "Plan ID: %s\nPlan file: %s\nRecommended profile: %s\nApplied profile: %s\n", plan.ID, path, plan.RecommendedProfile, plan.AppliedProfile)
+	if len(plan.ExternalCICoverage) > 0 {
+		fmt.Fprintln(c.Stdout, "Commands already covered by client CI (duplicate Harness gates omitted):")
+		for _, coverage := range plan.ExternalCICoverage {
+			fmt.Fprintf(c.Stdout, "  - %s:%s:%s -> %s %s/%s in %s\n", coverage.StackKind, coverage.StackPath, coverage.Gate, coverage.Provider, coverage.File, coverage.Job, coverage.Workdir)
+		}
+	}
 	if len(plan.ProposedGuardDefaults) > 0 {
 		fmt.Fprintln(c.Stdout, "Confirmable guard defaults from scan:")
 		categories := make([]string, 0, len(plan.ProposedGuardDefaults))

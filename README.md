@@ -35,7 +35,7 @@ Pregunta lo que el repositorio no demuestra, adáptalo al proyecto, implementa l
 
 ## What happens
 
-1. `scan` reads manifests, commands, workspaces, CI files, Git state, UI hints, persistence hints, and deployment files. It does not edit the repository.
+1. `scan` reads manifests, commands, workspaces, CI files, Git state, UI hints, persistence hints, and deployment files. It records literal GitLab and GitHub job commands with their effective working directories; an exact client-owned match is reported in the plan and omitted from generated Harness gates. Dynamic or non-equivalent commands remain required. It does not edit the repository.
 2. The agent asks about business facts that source code cannot prove, including criticality, data sensitivity, production use, authority, design ownership, rollback, approvals, ambiguous commands, and an undetected CI provider.
 3. `plan` recommends `baseline`, `production`, or `regulated`, then records the exact file operations under a cryptographic plan ID that expires after 30 minutes.
 4. The user reviews and approves that ID.
@@ -125,7 +125,7 @@ If change-request publishing is enabled and separately authorized, CI sends that
 To upgrade a legacy production installation, provide the required current-version workflow decisions in an answers file:
 
 ```bash
-sam-harness upgrade /path/to/repository --to 0.7.6 --answers /tmp/sam-harness-v0.7-answers.json
+sam-harness upgrade /path/to/repository --to 0.8.0 --answers /tmp/sam-harness-v0.8-answers.json
 ```
 
 `upgrade` merges explicit answers over the installed configuration and produces an expiring plan; it does not apply it. Review unresolved decisions and every operation, then approve and apply the exact new plan ID. Use the [workflow configuration shape](skills/sam-harness/references/workflow-configuration.md) for the static/test guard coverage, provider secret-name, protected-agent-environment and agent-control-plane decisions, filesystem and trusted-command attestations, and lifecycle commands that legacy v0.1 production configuration does not contain.

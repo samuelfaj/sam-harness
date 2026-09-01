@@ -135,6 +135,29 @@ func validateSemantics(cfg model.Config) error {
 	for _, provider := range cfg.CI.Providers {
 		providerSet[provider] = true
 	}
+	coveredStacks := map[string]bool{}
+	seenCoverage := map[string]bool{}
+	for _, coverage := range cfg.CI.ExternalCoverage {
+		stackKey := coverage.StackKind + ":" + coverage.StackPath
+		if _, ok := stackCommands[stackKey]; !ok || !safeRelativePath(coverage.StackPath) || !safeRelativePath(coverage.Workdir) || filepath.ToSlash(filepath.Clean(coverage.Workdir)) != filepath.ToSlash(filepath.Clean(coverage.StackPath)) {
+			return fmt.Errorf("validate config: external CI coverage does not match stack %s", stackKey)
+		}
+		if !providerSet[coverage.Provider] || strings.TrimSpace(coverage.Gate) == "" || strings.TrimSpace(coverage.Job) == "" || !safeRelativePath(coverage.File) || filepath.ToSlash(filepath.Clean(coverage.File)) != coverage.File || len(coverage.Command) == 0 {
+			return fmt.Errorf("validate config: invalid external CI coverage for %s:%s", stackKey, coverage.Gate)
+		}
+		if (coverage.Provider == "gitlab" && coverage.File != ".gitlab-ci.yml") || (coverage.Provider == "github" && !strings.HasPrefix(coverage.File, ".github/workflows/")) {
+			return fmt.Errorf("validate config: external CI coverage source does not match provider %s", coverage.Provider)
+		}
+		if err := validateCommand(coverage.Command); err != nil {
+			return fmt.Errorf("validate config: external CI coverage %s:%s: %w", stackKey, coverage.Gate, err)
+		}
+		coverageKey := stackKey + ":" + coverage.Gate
+		if seenCoverage[coverageKey] {
+			return fmt.Errorf("validate config: duplicate external CI coverage for %s", coverageKey)
+		}
+		seenCoverage[coverageKey] = true
+		coveredStacks[stackKey] = true
+	}
 	if cfg.CI.GitLabExternalPipelinePolicy {
 		control, ok := cfg.CI.AgentControlPlanes["gitlab"]
 		if !providerSet["gitlab"] || !ok || control.Mode != model.AgentControlPlaneModeExternal {
@@ -182,8 +205,11 @@ func validateSemantics(cfg model.Config) error {
 		}
 	}
 	for key, commandCount := range stackCommands {
-		if commandCount == 0 && strings.TrimSpace(cfg.Governance.CommandWaivers[key]) == "" {
+		if commandCount == 0 && !coveredStacks[key] && strings.TrimSpace(cfg.Governance.CommandWaivers[key]) == "" {
 			return fmt.Errorf("validate config: stack %s has no commands or recorded waiver", key)
+		}
+		if coveredStacks[key] && strings.TrimSpace(cfg.Governance.CommandWaivers[key]) != "" {
+			return fmt.Errorf("validate config: stack %s cannot have external CI coverage and a command waiver", key)
 		}
 	}
 	if cfg.Migration.Required && (!cfg.Migration.ReconciliationGate || !cfg.Migration.RestoreTest) {

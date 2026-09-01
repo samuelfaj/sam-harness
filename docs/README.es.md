@@ -63,7 +63,7 @@ Esos pedidos ejecutan `sam-harness onboard`, `sam-harness adopt --auto` o `sam-h
 
 ## Cómo funciona
 
-1. `scan` lee manifiestos, comandos, workspaces, CI, estado de Git e indicios de interfaz, persistencia y despliegue. No modifica el repositorio.
+1. `scan` lee manifiestos, comandos, workspaces, CI, estado de Git e indicios de interfaz, persistencia y despliegue. Registra comandos literales de jobs de GitLab y GitHub con sus directorios efectivos; una coincidencia exacta ya cubierta por la CI del cliente se muestra en el plan y se omite de los gates generados por Harness. Los comandos dinámicos o no equivalentes siguen siendo obligatorios. No modifica el repositorio.
 2. El agente pregunta por los hechos de negocio que el código no puede demostrar, como criticidad, sensibilidad de datos, uso en producción, autoridad, diseño, rollback, responsables, comandos ambiguos y un proveedor de CI no detectado.
 3. `plan` recomienda `baseline`, `production` o `regulated` y enumera las operaciones bajo un identificador criptográfico que caduca después de 30 minutos.
 4. El usuario revisa y aprueba ese identificador.
@@ -151,7 +151,7 @@ Si la publicación de change requests está habilitada y autorizada por separado
 Para actualizar una instalación de producción heredada, proporciona las decisiones obligatorias del workflow de la versión actual en un archivo de respuestas:
 
 ```bash
-sam-harness upgrade /ruta/al/repositorio --to 0.7.6 --answers /tmp/sam-harness-respuestas-v0.7.json
+sam-harness upgrade /ruta/al/repositorio --to 0.8.0 --answers /tmp/sam-harness-respuestas-v0.8.json
 ```
 
 `upgrade` combina las respuestas explícitas con la configuración instalada y produce un plan con caducidad; no lo aplica. Revisa las decisiones pendientes y todas las operaciones, después aprueba y aplica el nuevo ID exacto. Usa la [estructura de configuración del workflow](../skills/sam-harness/references/workflow-configuration.md) para la cobertura de guards `static`/`test`, las decisiones sobre nombres de secretos, entorno protegido de agentes y control plane del proveedor, las atestaciones del filesystem y del comando confiable, y los comandos del ciclo que una configuración heredada de producción v0.1 no contiene.
