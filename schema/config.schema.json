@@ -99,7 +99,8 @@
           }
         },
         "agent_runtime": { "$ref": "#/$defs/ci_agent_runtime" },
-        "gitlab_image": { "type": "string", "minLength": 1 }
+        "gitlab_image": { "type": "string", "minLength": 1 },
+        "gitlab_external_pipeline_policy": { "type": "boolean" }
       }
     },
     "release": { "$ref": "#/$defs/release" },

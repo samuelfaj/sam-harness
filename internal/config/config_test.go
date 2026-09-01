@@ -404,6 +404,33 @@ func TestMarshalAndParsePreservesAgentControlPlaneForUpgrade(t *testing.T) {
 	}
 }
 
+func TestGitLabExternalPipelinePolicyRequiresAndPreservesExternalControl(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig()
+	cfg.CI.Providers = []string{"gitlab"}
+	cfg.CI.AgentControlPlanes = map[string]model.AgentControlPlane{
+		"gitlab": {
+			Mode:            model.AgentControlPlaneModeExternal,
+			RequiredCheck:   "sam-harness/trusted-gates",
+			ExternalProject: "trusted/review-control",
+		},
+	}
+	cfg.CI.GitLabExternalPipelinePolicy = true
+
+	parsed, err := Parse(mustMarshalYAML(t, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !parsed.CI.GitLabExternalPipelinePolicy {
+		t.Fatal("GitLab external pipeline policy was not preserved")
+	}
+
+	cfg.CI.AgentControlPlanes = nil
+	if _, err := Parse(mustMarshalYAML(t, cfg)); err == nil {
+		t.Fatal("GitLab external pipeline policy was accepted without external control")
+	}
+}
+
 func TestParseRejectsInvalidAgentControlPlanes(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

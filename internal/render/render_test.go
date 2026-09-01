@@ -1172,6 +1172,31 @@ func TestBuildGitLabRunsIndependentGatesInParallelAndJoinsThemAtArtifact(t *test
 	}
 }
 
+func TestBuildGitLabDefersMergeRequestPhasesToExternalPipelinePolicy(t *testing.T) {
+	t.Parallel()
+	approved := productionAnswers()
+	enabled := true
+	approved.GitLabExternalPipelinePolicy = &enabled
+	content := operationContent(t, buildProductionOperationsWithAnswers(t, t.TempDir(), approved), ".sam-harness/ci/gitlab.yml")
+
+	for _, bounds := range [][2]string{
+		{"sam-harness-static:\n", "sam-harness-test:\n"},
+		{"sam-harness-test:\n", "sam-harness-artifact:\n"},
+		{"sam-harness-artifact:\n", "sam-harness-staging:\n"},
+	} {
+		section := contentSection(t, content, bounds[0], bounds[1])
+		for _, expected := range []string{
+			`if: '$CI_PIPELINE_SOURCE == "merge_request_event"'`,
+			"when: never # Protected external policy owns merge-request gates.",
+			`if: '$CI_COMMIT_BRANCH'`,
+		} {
+			if !strings.Contains(section, expected) {
+				t.Fatalf("GitLab phase %q does not defer merge-request execution to the external policy %q:\n%s", bounds[0], expected, section)
+			}
+		}
+	}
+}
+
 func TestBuildLocalSkillsInstallsSevenLifecycleContracts(t *testing.T) {
 	t.Parallel()
 	operations := buildProductionOperations(t, t.TempDir())
