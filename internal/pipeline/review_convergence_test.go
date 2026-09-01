@@ -3,6 +3,7 @@ package pipeline
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,6 +38,42 @@ func convergenceTestReceipt(t *testing.T, root, headSHA string, finding Finding)
 
 func testReceiptTime() (value time.Time) {
 	return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+}
+
+func TestPriorReviewAcceptsPassedInitialManifest(t *testing.T) {
+	root := t.TempDir()
+	prior := convergenceTestReceipt(t, root, strings.Repeat("c", 40), convergenceTestFinding(model.ReviewerTestQuality, "P2", "changed.go", 2))
+	prior.Passed = true
+	prior.Status = StatusPassed
+	prior.Error = ""
+	prior.ReviewConvergence = reviewConvergenceInitial
+	prior.Fingerprint = strings.Repeat("d", sha256.Size*2)
+	prior.FinalFingerprint = prior.Fingerprint
+	for _, role := range model.ReviewerRoles {
+		prior.Commands = append(prior.Commands, CommandResult{
+			Name: "review:" + string(role), Phase: model.PhaseReview, Workdir: ".", Required: true, Passed: true,
+		})
+	}
+	evidenceDir := filepath.Join(root, ".sam-harness", "evidence")
+	if err := os.MkdirAll(evidenceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(evidenceDir, receiptFilename(prior))
+	encoded, err := json.Marshal(prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := model.Config{Repository: "fixture", Evidence: model.Evidence{ReceiptDirectory: ".sam-harness/evidence"}}
+	loadedPath, digest, loaded, err := loadPriorReviewReceipt(root, cfg, path)
+	if err != nil {
+		t.Fatalf("passed initial manifest rejected: %v", err)
+	}
+	if loadedPath != path || digest == "" || loaded.RepairManifest == nil || len(loaded.RepairManifest.Actions) != 1 {
+		t.Fatalf("passed initial manifest was not loaded intact: path=%q digest=%q receipt=%#v", loadedPath, digest, loaded)
+	}
 }
 
 func TestReviewManifestTamperRejectsIdentityStatusAndLineageChanges(t *testing.T) {
