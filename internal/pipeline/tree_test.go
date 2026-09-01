@@ -148,6 +148,37 @@ func TestReviewSandboxPreservesTrackedIgnoredSourceFingerprint(t *testing.T) {
 	}
 }
 
+func TestSourceFingerprintUsesPortableGitFileModes(t *testing.T) {
+	root := t.TempDir()
+	writeTreeTestFile(t, root, "source.sh", "#!/bin/sh\n")
+
+	baseline, err := sourceFingerprint(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(root, "source.sh"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	portable, err := sourceFingerprint(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if portable != baseline {
+		t.Fatal("runner-specific read and write permissions changed the source fingerprint")
+	}
+
+	if err := os.Chmod(filepath.Join(root, "source.sh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	executable, err := sourceFingerprint(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executable == baseline {
+		t.Fatal("Git-tracked executable mode did not change the source fingerprint")
+	}
+}
+
 func writeTreeTestFile(t *testing.T, root, relative, content string) {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(relative))
