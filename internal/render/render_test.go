@@ -1086,10 +1086,15 @@ func TestBuildGitLabRendersLifecycleAndManualTrustedRepairPublisher(t *testing.T
 		"when: manual",
 		"allow_failure: false",
 		"sed -n 's/^Receipt: //p'",
+		"timeout: 2 minutes",
 	} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("GitLab workflow missing %q:\n%s", expected, content)
 		}
+	}
+	github := operationContent(t, buildProductionOperations(t, t.TempDir()), ".github/workflows/sam-harness.yml")
+	if !strings.Contains(contentSection(t, github, "  observe:\n", "  rollback:\n"), "timeout-minutes: 2") {
+		t.Fatalf("GitHub observation job must derive a bounded timeout from its check:\n%s", github)
 	}
 	if strings.Count(content, "job: sam-harness-artifact") < 3 {
 		t.Fatalf("GitLab promotion jobs do not receive the immutable artifact and artifact receipt directly:\n%s", content)

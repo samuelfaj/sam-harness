@@ -1787,6 +1787,9 @@ func writeGitHubTrustedRepairPublisher(builder *strings.Builder, cfg model.Confi
 
 func writeGitHubPhaseJob(builder *strings.Builder, cfg model.Config, job string, phase model.Phase, needs, environment string) {
 	builder.WriteString(fmt.Sprintf("  %s:\n    runs-on: ubuntu-latest\n", job))
+	if timeout := observationTimeoutMinutes(cfg, phase); timeout > 0 {
+		builder.WriteString(fmt.Sprintf("    timeout-minutes: %d\n", timeout))
+	}
 	if needs != "" {
 		builder.WriteString(fmt.Sprintf("    needs: %s\n", needs))
 	}
@@ -2264,6 +2267,9 @@ func gitlabJob(cfg model.Config) string {
 
 func writeGitLabPhaseJob(builder *strings.Builder, cfg model.Config, job string, phase model.Phase, stage string, needs []string, defaultBranchOnly bool) {
 	builder.WriteString("\n" + job + ":\n  extends: .sam-harness-base\n  stage: " + stage + "\n")
+	if timeout := observationTimeoutMinutes(cfg, phase); timeout > 0 {
+		builder.WriteString(fmt.Sprintf("  timeout: %d minutes\n", timeout))
+	}
 	if needs != nil {
 		if len(needs) == 0 {
 			builder.WriteString("  needs: []\n")
@@ -2677,6 +2683,22 @@ func artifactExtractCommandTarget(archiveTarget string) string {
 
 func deploymentPhase(phase model.Phase) bool {
 	return phase == model.PhaseStaging || phase == model.PhaseMigration || phase == model.PhaseProduction || phase == model.PhaseObserve || phase == model.PhaseRollback
+}
+
+func observationTimeoutMinutes(cfg model.Config, phase model.Phase) int {
+	if phase != model.PhaseObserve || cfg.Workflow == nil {
+		return 0
+	}
+	maxSeconds := 0
+	for _, check := range cfg.Workflow.Deployment.ObservationChecks {
+		if check.TimeoutSeconds > maxSeconds {
+			maxSeconds = check.TimeoutSeconds
+		}
+	}
+	if maxSeconds <= 0 {
+		return 0
+	}
+	return (maxSeconds + 59) / 60
 }
 
 func untrustedPhase(phase model.Phase) bool {

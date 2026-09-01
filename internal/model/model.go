@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-var HarnessVersion = "0.8.7"
+var HarnessVersion = "0.8.8"
 
 const SchemaVersion = "1"
 

@@ -125,7 +125,7 @@ If change-request publishing is enabled and separately authorized, CI sends that
 To upgrade a legacy production installation, provide the required current-version workflow decisions in an answers file:
 
 ```bash
-sam-harness upgrade /path/to/repository --to 0.8.7 --answers /tmp/sam-harness-v0.8-answers.json
+sam-harness upgrade /path/to/repository --to 0.8.8 --answers /tmp/sam-harness-v0.8-answers.json
 ```
 
 `upgrade` merges explicit answers over the installed configuration and produces an expiring plan; it does not apply it. Review unresolved decisions and every operation, then approve and apply the exact new plan ID. Use the [workflow configuration shape](skills/sam-harness/references/workflow-configuration.md) for the static/test guard coverage, provider secret-name, protected-agent-environment and agent-control-plane decisions, filesystem and trusted-command attestations, and lifecycle commands that legacy v0.1 production configuration does not contain.
