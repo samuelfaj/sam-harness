@@ -476,19 +476,29 @@ func parseNewDiffRange(header string) (int, bool) {
 	return start, ok
 }
 
-func validateInitialFindingHunks(findings []Finding, change reviewChangeEvidence) error {
+func scopeInitialFindings(findings []Finding, change reviewChangeEvidence, lineage string) ([]Finding, []Finding, error) {
 	if len(findings) == 0 {
-		return nil
+		return nil, nil, nil
 	}
 	if change.baseRoot == "" || len(change.patch) == 0 {
-		return errors.New("initial review findings require a base-to-head patch for changed-hunk proof")
+		return nil, nil, errors.New("initial review findings require a base-to-head patch for changed-hunk proof")
 	}
+	inScope := make([]Finding, 0, len(findings))
+	excluded := make([]Finding, 0)
 	for _, finding := range findings {
-		if !diffContainsChangedLine(string(change.patch), finding.Path, finding.Line) {
-			return fmt.Errorf("finding %s:%d is outside an added or modified base-to-head hunk", finding.Path, finding.Line)
+		if diffContainsChangedLine(string(change.patch), finding.Path, finding.Line) {
+			inScope = append(inScope, finding)
+			continue
 		}
+		if finding.Severity == "P0" || finding.Severity == "P1" {
+			return nil, excluded, fmt.Errorf("finding %s:%d is outside an added or modified base-to-head hunk", finding.Path, finding.Line)
+		}
+		finding.ID = findingIdentity(finding)
+		finding.Status = findingStatusExcluded
+		finding.Lineage = lineage
+		excluded = append(excluded, finding)
 	}
-	return nil
+	return inScope, excluded, nil
 }
 
 func parseDiffRange(value string) (int, int, bool) {

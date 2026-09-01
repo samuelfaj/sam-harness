@@ -110,7 +110,7 @@ Generated secret-bearing jobs use a trusted released matching-version CLI and pa
 A legacy production or regulated configuration does not contain the required current-version workflow, CI secret decision, protected agent-environment/control-plane mappings, filesystem attestations, or trusted-external-command decisions. Collect the complete [workflow configuration](workflow-configuration.md), including provider bindings or explicit waivers, protected agent environments, control planes, verified reviewer/correction attestations, and any trusted config argv positions, in a temporary answers file outside the repository, then run:
 
 ```text
-sam-harness upgrade <root> --to 0.7.4 --answers <answers-file>
+sam-harness upgrade <root> --to 0.7.5 --answers <answers-file>
 ```
 
 Show unresolved decisions, every file operation, and the new plan ID. Apply only after the user approves that exact ID. If the repository fingerprint changes or the plan expires, discard it and create another upgrade plan.

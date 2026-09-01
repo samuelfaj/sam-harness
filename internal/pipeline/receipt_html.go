@@ -46,6 +46,7 @@ type receiptHTMLPage struct {
 	RepairManifestSHA256      string
 	SourceReceipt             string
 	Findings                  []receiptHTMLFinding
+	ExcludedFindings          []receiptHTMLFinding
 	ReviewExecutionFailures   []receiptHTMLExecutionFailure
 	ReviewIncomplete          bool
 	ReviewClean               bool
@@ -107,10 +108,11 @@ table{border-collapse:collapse;width:100%;table-layout:fixed}th,td{border:1px so
 <dt>Review patch</dt><dd>{{.ReviewPatch}}</dd><dt>Review patch SHA-256</dt><dd>{{.ReviewPatchSHA256}}</dd><dt>Review lineage SHA-256</dt><dd>{{.ReviewLineageSHA256}}</dd>
 <dt>Prior review receipt</dt><dd>{{.PriorReviewReceipt}}</dd><dt>Prior receipt SHA-256</dt><dd>{{.PriorReviewReceiptSHA256}}</dd><dt>Prior manifest SHA-256</dt><dd>{{.PriorReviewManifestSHA256}}</dd>
 </dl>
-<p>Finding scope: initial findings must identify a current added or modified line in the base-to-head diff, or line 0 only for deletion-only, deleted, or pure-rename file-level evidence. During convergence, frozen actions remain eligible; new findings use the same scope rule in the prior-head-to-current-head diff.</p>
+<p>Finding scope: initial correction findings must identify a current added or modified line in the base-to-head diff, or line 0 only for deletion-only, deleted, or pure-rename file-level evidence. Out-of-scope P0/P1 findings block; out-of-scope P2/P3 suggestions are recorded below but excluded from correction. During convergence, frozen actions remain eligible; new findings use the same scope rule in the prior-head-to-current-head diff.</p>
 {{if .ReviewExecutionFailures}}<h2>Review execution failures</h2><p class="bad">{{.ReviewFailureAction}}</p><table><thead><tr><th>Role</th><th>Name</th><th>Exit code</th><th>Timeout</th><th>Skipped</th><th>Status</th><th>Output excerpt</th></tr></thead><tbody>{{range .ReviewExecutionFailures}}<tr><td>{{.Role}}</td><td>{{.Name}}</td><td>{{.ExitCode}}</td><td>{{.TimedOut}}</td><td>{{.Skipped}}</td><td>{{.Status}}</td><td><pre>{{.Output}}</pre></td></tr>{{end}}</tbody></table>{{end}}
 <h2>Findings and required changes</h2>
 {{if .Findings}}<table><thead><tr><th>Finding</th><th>Evidence</th><th>Exact required change</th><th>Acceptance</th></tr></thead><tbody>{{range .Findings}}<tr><td><div class="finding-meta">id={{.ID}}<br>role={{.Role}} severity={{.Severity}} status={{.Status}} line={{.Line}}<br>lineage={{.Lineage}}</div><strong>{{.Summary}}</strong><br><code>{{.Path}}</code></td><td><pre>{{.Evidence}}</pre></td><td><pre>{{.RequiredChange}}</pre></td><td><pre>{{.Acceptance}}</pre></td></tr>{{end}}</tbody></table>{{else if .ReviewNoFindingsMessage}}<p class="{{if .ReviewClean}}good{{else}}bad{{end}}">{{.ReviewNoFindingsMessage}}</p>{{else}}<p>No findings were recorded.</p>{{end}}
+{{if .ExcludedFindings}}<h2>Excluded reviewer suggestions</h2><p>These P2/P3 suggestions were recorded for human inspection but excluded from the correction manifest because their evidence is outside the changed diff.</p><table><thead><tr><th>Suggestion</th><th>Evidence</th><th>Suggested change</th><th>Acceptance</th></tr></thead><tbody>{{range .ExcludedFindings}}<tr><td><div class="finding-meta">id={{.ID}}<br>role={{.Role}} severity={{.Severity}} status={{.Status}} line={{.Line}}<br>lineage={{.Lineage}}</div><strong>{{.Summary}}</strong><br><code>{{.Path}}</code></td><td><pre>{{.Evidence}}</pre></td><td><pre>{{.RequiredChange}}</pre></td><td><pre>{{.Acceptance}}</pre></td></tr>{{end}}</tbody></table>{{end}}
 {{if .ReviewIncomplete}}<p class="bad"><strong>INCOMPLETE REVIEW — no approval or complete correction manifest exists.</strong> Resolve the block and rerun the review.</p>{{end}}
 <h2>Resolution and convergence</h2><dl>
 <dt>Convergence state</dt><dd>{{.ReviewConvergence}}</dd><dt>Resolved finding IDs</dt><dd>{{.ResolvedFindingIDs}}</dd><dt>Unresolved finding IDs</dt><dd>{{.UnresolvedFindingIDs}}</dd><dt>Regression finding IDs</dt><dd>{{.RegressionFindingIDs}}</dd>
@@ -164,19 +166,10 @@ func receiptHTML(receipt Receipt) (string, error) {
 		SourceReceipt:             stringValue(value, "source_receipt"),
 	}
 	if rawFindings, ok := value["findings"].([]any); ok {
-		page.Findings = make([]receiptHTMLFinding, 0, len(rawFindings))
-		for _, rawFinding := range rawFindings {
-			finding, ok := rawFinding.(map[string]any)
-			if !ok {
-				continue
-			}
-			page.Findings = append(page.Findings, receiptHTMLFinding{
-				ID: stringValue(finding, "id"), Role: stringValue(finding, "role"), Severity: stringValue(finding, "severity"),
-				Status: stringValue(finding, "status"), Lineage: stringValue(finding, "lineage"), Summary: stringValue(finding, "summary"),
-				Evidence: stringValue(finding, "evidence"), Path: stringValue(finding, "path"), Line: stringValue(finding, "line"),
-				RequiredChange: stringValue(finding, "required_change"), Acceptance: stringValue(finding, "acceptance"),
-			})
-		}
+		page.Findings = receiptHTMLFindings(rawFindings)
+	}
+	if rawFindings, ok := value["excluded_findings"].([]any); ok {
+		page.ExcludedFindings = receiptHTMLFindings(rawFindings)
 	}
 	page.ReviewExecutionFailures = reviewExecutionFailures(value)
 	reviewAttempted := reviewEvidencePresent(receipt, value)
@@ -203,6 +196,23 @@ func receiptHTML(receipt Receipt) (string, error) {
 		return "", err
 	}
 	return output.String(), nil
+}
+
+func receiptHTMLFindings(rawFindings []any) []receiptHTMLFinding {
+	findings := make([]receiptHTMLFinding, 0, len(rawFindings))
+	for _, rawFinding := range rawFindings {
+		finding, ok := rawFinding.(map[string]any)
+		if !ok {
+			continue
+		}
+		findings = append(findings, receiptHTMLFinding{
+			ID: stringValue(finding, "id"), Role: stringValue(finding, "role"), Severity: stringValue(finding, "severity"),
+			Status: stringValue(finding, "status"), Lineage: stringValue(finding, "lineage"), Summary: stringValue(finding, "summary"),
+			Evidence: stringValue(finding, "evidence"), Path: stringValue(finding, "path"), Line: stringValue(finding, "line"),
+			RequiredChange: stringValue(finding, "required_change"), Acceptance: stringValue(finding, "acceptance"),
+		})
+	}
+	return findings
 }
 
 func reviewEvidencePresent(receipt Receipt, values map[string]any) bool {

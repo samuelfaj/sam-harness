@@ -261,14 +261,24 @@ func TestReviewConvergenceLineZeroRequiresDeletionOnlyOrPureRename(t *testing.T)
 func TestInitialFindingMustBeInsideChangedHunk(t *testing.T) {
 	validPatch := "diff --git a/changed.go b/changed.go\n@@ -1,3 +1,3 @@\n one\n-two\n+updated\n three\n"
 	change := reviewChangeEvidence{baseRoot: "/trusted/base", patch: []byte(validPatch)}
-	if err := validateInitialFindingHunks([]Finding{convergenceTestFinding(model.ReviewerSecurity, "P1", "changed.go", 2)}, change); err != nil {
+	lineage := strings.Repeat("a", 64)
+	inScope, excluded, err := scopeInitialFindings([]Finding{convergenceTestFinding(model.ReviewerSecurity, "P1", "changed.go", 2)}, change, lineage)
+	if err != nil || len(inScope) != 1 || len(excluded) != 0 {
 		t.Fatalf("changed-line finding rejected: %v", err)
 	}
-	if err := validateInitialFindingHunks([]Finding{convergenceTestFinding(model.ReviewerSecurity, "P1", "changed.go", 1)}, change); err == nil {
+	if _, _, err := scopeInitialFindings([]Finding{convergenceTestFinding(model.ReviewerSecurity, "P1", "changed.go", 1)}, change, lineage); err == nil {
 		t.Fatal("out-of-hunk line accepted")
 	}
-	if err := validateInitialFindingHunks([]Finding{convergenceTestFinding(model.ReviewerSecurity, "P1", "other.go", 2)}, change); err == nil {
+	if _, _, err := scopeInitialFindings([]Finding{convergenceTestFinding(model.ReviewerSecurity, "P1", "other.go", 2)}, change, lineage); err == nil {
 		t.Fatal("out-of-diff path accepted")
+	}
+	lowSeverity := convergenceTestFinding(model.ReviewerTestQuality, "P2", "changed.go", 1)
+	inScope, excluded, err = scopeInitialFindings([]Finding{lowSeverity}, change, lineage)
+	if err != nil || len(inScope) != 0 || len(excluded) != 1 {
+		t.Fatalf("out-of-scope P2 was not excluded: err=%v in_scope=%#v excluded=%#v", err, inScope, excluded)
+	}
+	if excluded[0].Status != findingStatusExcluded || excluded[0].Lineage != lineage || excluded[0].ID != findingIdentity(lowSeverity) {
+		t.Fatalf("excluded P2 lacks stable human evidence: %#v", excluded[0])
 	}
 }
 
@@ -311,7 +321,7 @@ func TestInitialFindingScopeParsesQuotedRenameAndDeletionDiffs(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			change := reviewChangeEvidence{baseRoot: "/trusted/base", patch: []byte(scenario.patch)}
-			err := validateInitialFindingHunks([]Finding{convergenceTestFinding(model.ReviewerSecurity, "P1", scenario.path, scenario.line)}, change)
+			_, _, err := scopeInitialFindings([]Finding{convergenceTestFinding(model.ReviewerSecurity, "P1", scenario.path, scenario.line)}, change, strings.Repeat("a", 64))
 			if scenario.valid && err != nil {
 				t.Fatalf("valid diff scope was rejected: %v", err)
 			}
@@ -319,6 +329,36 @@ func TestInitialFindingScopeParsesQuotedRenameAndDeletionDiffs(t *testing.T) {
 				t.Fatal("invalid diff scope was accepted")
 			}
 		})
+	}
+}
+
+func TestReviewReceiptHTMLRecordsExcludedOutOfScopeSuggestions(t *testing.T) {
+	finding := convergenceTestFinding(model.ReviewerTestQuality, "P2", "unchanged.go", 9)
+	finding.ID = findingIdentity(finding)
+	finding.Status = findingStatusExcluded
+	finding.Lineage = strings.Repeat("a", 64)
+	receipt := Receipt{
+		HarnessVersion:   model.HarnessVersion,
+		Kind:             "pipeline",
+		Phase:            model.PhaseReview,
+		Passed:           true,
+		Status:           StatusPassed,
+		ExcludedFindings: []Finding{finding},
+	}
+	html, err := receiptHTML(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"CLEAN — no findings were recorded.",
+		"Excluded reviewer suggestions",
+		"excluded_out_of_scope",
+		"outside the changed diff",
+		"unchanged.go",
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("HTML receipt omitted %q", required)
+		}
 	}
 }
 

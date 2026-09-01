@@ -23,6 +23,7 @@ const (
 	findingStatusUnresolved = "unresolved"
 	findingStatusRecorded   = "recorded"
 	findingStatusRegression = "regression"
+	findingStatusExcluded   = "excluded_out_of_scope"
 )
 
 func attachRepairManifest(receipt *Receipt) error {
