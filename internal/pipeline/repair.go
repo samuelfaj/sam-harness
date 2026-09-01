@@ -685,7 +685,7 @@ func initializeSandboxGit(root string) error {
 		return err
 	}
 	for _, arguments := range [][]string{
-		{"add", "--all"},
+		{"add", "--all", "--force"},
 		{"-c", "user.name=sam-harness", "-c", "user.email=repair@localhost", "commit", "--quiet", "--no-verify", "--allow-empty", "-m", "sam-harness repair baseline"},
 	} {
 		command := exec.Command("git", arguments...)
