@@ -255,13 +255,13 @@ func (c *CLI) check(args []string) error {
 }
 
 func (c *CLI) pipeline(args []string) error {
-	options, err := parseOptions(args, map[string]bool{"config": true, "format": true, "phase": true, "receipt": true, "review-base": true, "review-base-sha": true, "review-head-sha": true, "prior-review-receipt": true, "risk": true})
+	options, err := parseOptions(args, map[string]bool{"config": true, "format": true, "phase": true, "gate": true, "receipt": true, "review-base": true, "review-base-sha": true, "review-head-sha": true, "prior-review-receipt": true, "risk": true})
 	if err != nil {
 		return err
 	}
 	phase := model.Phase(options.values["phase"])
 	if !phase.Valid() {
-		return errors.New("--phase must be one of static, test, review, artifact, staging, production, observe, rollback, migration, or all")
+		return errors.New("--phase must be one of static, test, e2e, review, artifact, staging, production, observe, rollback, migration, or all")
 	}
 	writeReceipt, err := boolOption(options, "receipt", true)
 	if err != nil {
@@ -269,6 +269,7 @@ func (c *CLI) pipeline(args []string) error {
 	}
 	report, receipt, runErr := pipelinerun.RunWithOptions(options.path(), phase, writeReceipt, pipelinerun.RunOptions{
 		ConfigPath:         options.values["config"],
+		Gate:               options.values["gate"],
 		ReviewBase:         options.values["review-base"],
 		ReviewBaseSHA:      options.values["review-base-sha"],
 		ReviewHeadSHA:      options.values["review-head-sha"],
@@ -1166,7 +1167,7 @@ Usage:
   sam-harness status [path] [--format human|json] [--checks-file file]
   sam-harness publish [path] --branch name --title text --paths a,b [--body text] [--base sha]
   sam-harness check [path] [--format human|json] [--receipt true|false]
-  sam-harness pipeline [path] [--config absolute-or-contained-file] [--review-base absolute-directory --review-base-sha hex --review-head-sha hex] [--prior-review-receipt file] [--risk low|medium|high|critical] --phase static|test|review|artifact|staging|production|observe|rollback|migration|all [--receipt true|false]
+  sam-harness pipeline [path] [--config absolute-or-contained-file] [--gate name] [--review-base absolute-directory --review-base-sha hex --review-head-sha hex] [--prior-review-receipt file] [--risk low|medium|high|critical] --phase static|test|e2e|review|artifact|staging|production|observe|rollback|migration|all [--receipt true|false]
   sam-harness repair [path] [--config absolute-or-contained-file] --receipt file [--receipt-output true|false]
   sam-harness doctor [path] [--format human|json]
   sam-harness upgrade [path] --to version [--answers file] [--output file]

@@ -41,7 +41,7 @@ Pregunta lo que el repositorio no demuestra, adáptalo al proyecto, implementa l
 4. The user reviews and approves that ID.
 5. `apply` rejects stale repository state and writes only the approved operations.
 6. `doctor` validates the installed structure. `check` runs the configured local gates and writes an evidence receipt.
-7. `pipeline` runs an approved phase—static checks, tests, pre-merge six-role review, artifact, staging, production, observation, rollback, or migration—and writes a phase-specific receipt.
+7. `pipeline` runs an approved phase—static checks, tests, E2E, pre-merge six-role review, artifact, staging, production, observation, rollback, or migration—and writes a phase-specific receipt. Confirmed browser commands run in the dedicated E2E phase, never inside static or unit-test jobs.
 8. If `static`, `test`, `review`, or `artifact` fails and correction was explicitly enabled, `repair` validates the current receipt, runs the configured command in an isolated Git sandbox, enforces cumulative attempt/file/line budgets, reruns static checks and tests, and emits a correction-only patch with its SHA-256. Failed review receipts carry one frozen hashed repair manifest containing every reviewer's exact required change and observable acceptance condition, so correction addresses all known work together before one independent convergence re-review.
 
 Sam Harness preserves existing `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, Copilot instructions, `.gitignore`, and GitLab CI content through bounded managed blocks. It adds workflow, reviewer, change-budget, observation, and retirement guidance without replacing user-owned content.
@@ -64,7 +64,7 @@ sam-harness publish [path] --branch name --title text --paths a,b [--body text] 
 sam-harness check [path] [--format human|json] [--receipt true|false]
 sam-harness doctor [path]
 sam-harness upgrade [path] --to <version> [--answers <file>] [--output <file>]
-sam-harness pipeline [path] [--config <absolute-or-contained-file>] [--review-base <absolute-directory> --review-base-sha <hex> --review-head-sha <hex>] [--prior-review-receipt <file>] --phase <static|test|review|artifact|staging|production|observe|rollback|migration|all> [--receipt true|false]
+sam-harness pipeline [path] [--config <absolute-or-contained-file>] [--gate <name>] [--review-base <absolute-directory> --review-base-sha <hex> --review-head-sha <hex>] [--prior-review-receipt <file>] --phase <static|test|e2e|review|artifact|staging|production|observe|rollback|migration|all> [--receipt true|false]
 sam-harness repair [path] [--config <absolute-or-contained-file>] --receipt <file> [--receipt-output true|false]
 ```
 
@@ -125,7 +125,7 @@ If change-request publishing is enabled and separately authorized, CI sends that
 To upgrade a legacy production installation, provide the required current-version workflow decisions in an answers file:
 
 ```bash
-sam-harness upgrade /path/to/repository --to 0.8.8 --answers /tmp/sam-harness-v0.8-answers.json
+sam-harness upgrade /path/to/repository --to 0.9.0 --answers /tmp/sam-harness-v0.9-answers.json
 ```
 
 `upgrade` merges explicit answers over the installed configuration and produces an expiring plan; it does not apply it. Review unresolved decisions and every operation, then approve and apply the exact new plan ID. Use the [workflow configuration shape](skills/sam-harness/references/workflow-configuration.md) for the static/test guard coverage, provider secret-name, protected-agent-environment and agent-control-plane decisions, filesystem and trusted-command attestations, and lifecycle commands that legacy v0.1 production configuration does not contain.

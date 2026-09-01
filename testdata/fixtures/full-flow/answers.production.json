@@ -27,6 +27,7 @@
   "observation_window": "two successful observation checks after production promotion",
   "rollback_owner": "fixture-release-owner",
   "production_environment": "production",
+  "browser_command": ["go", "run", "./tools/lifecycle", "preflight"],
   "workflow": {
     "enabled": true,
     "static_guards": {
@@ -45,8 +46,7 @@
     },
     "test_guards": {
       "commands": {
-        "unit": {"name": "unit and compile tests", "workdir": ".", "command": ["go", "test", "./..."], "required": true, "timeout_seconds": 60},
-        "e2e": {"name": "fixture preflight", "workdir": ".", "command": ["go", "run", "./tools/lifecycle", "preflight"], "required": true, "timeout_seconds": 60}
+        "unit": {"name": "unit and compile tests", "workdir": ".", "command": ["go", "test", "./..."], "required": true, "timeout_seconds": 60}
       },
       "waivers": {
         "integration": "The fixture has no external collaborator or secondary process.",

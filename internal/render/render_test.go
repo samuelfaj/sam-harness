@@ -204,6 +204,37 @@ func TestBuildGeneratesParseableCIWithApprovedSetup(t *testing.T) {
 	}
 }
 
+func TestBuildSeparatesConfirmedBrowserChecksIntoE2EPhase(t *testing.T) {
+	t.Parallel()
+	approved := productionAnswers()
+	approved.BrowserCommand = []string{"npx", "playwright", "test"}
+	operations := buildProductionOperationsWithAnswers(t, t.TempDir(), approved)
+
+	config := operationContent(t, operations, ".sam-harness/config.yaml")
+	if !strings.Contains(config, "name: browser") || !strings.Contains(config, "phase: e2e") {
+		t.Fatalf("browser command was not classified as e2e:\n%s", config)
+	}
+
+	github := operationContent(t, operations, ".github/workflows/sam-harness.yml")
+	e2e := contentSection(t, github, "  e2e:\n", "  artifact:\n")
+	if !strings.Contains(e2e, "needs: test") || !strings.Contains(e2e, "--phase e2e") {
+		t.Fatalf("GitHub e2e job is not a distinct post-test phase:\n%s", e2e)
+	}
+	artifactGitHub := contentSection(t, github, "  artifact:\n", "  staging:\n")
+	if !strings.Contains(artifactGitHub, "needs: e2e") {
+		t.Fatalf("GitHub artifact does not wait for e2e:\n%s", artifactGitHub)
+	}
+
+	gitlab := operationContent(t, operations, ".sam-harness/ci/gitlab.yml")
+	if !strings.Contains(gitlab, "  - e2e\n") || !strings.Contains(gitlab, "sam-harness-e2e:\n") || !strings.Contains(gitlab, "--phase e2e") {
+		t.Fatalf("GitLab e2e job is missing:\n%s", gitlab)
+	}
+	artifact := contentSection(t, gitlab, "sam-harness-artifact:\n", "sam-harness-staging:\n")
+	if !strings.Contains(artifact, "job: sam-harness-e2e") {
+		t.Fatalf("GitLab artifact does not wait for e2e:\n%s", artifact)
+	}
+}
+
 func TestBuildSelfRepositoryUsesLocalHarnessCommand(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "sam-harness")

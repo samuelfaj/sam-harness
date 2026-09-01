@@ -90,7 +90,7 @@ sam-harness freeze check [path] [--policy archivo] [--now rfc3339] [--exception 
 sam-harness check [path] [--format human|json] [--receipt true|false]
 sam-harness doctor [path]
 sam-harness upgrade [path] --to <versión> [--answers <archivo>] [--output <archivo>]
-sam-harness pipeline [path] [--config <archivo-absoluto-o-contenido>] [--review-base <directorio-absoluto> --review-base-sha <hex> --review-head-sha <hex>] --phase <static|test|review|artifact|staging|production|observe|rollback|migration|all> [--receipt true|false]
+sam-harness pipeline [path] [--config <archivo-absoluto-o-contenido>] [--gate <nombre>] [--review-base <directorio-absoluto> --review-base-sha <hex> --review-head-sha <hex>] --phase <static|test|e2e|review|artifact|staging|production|observe|rollback|migration|all> [--receipt true|false]
 sam-harness repair [path] [--config <archivo-absoluto-o-contenido>] --receipt <archivo> [--receipt-output true|false]
 ```
 
@@ -151,7 +151,7 @@ Si la publicación de change requests está habilitada y autorizada por separado
 Para actualizar una instalación de producción heredada, proporciona las decisiones obligatorias del workflow de la versión actual en un archivo de respuestas:
 
 ```bash
-sam-harness upgrade /ruta/al/repositorio --to 0.8.8 --answers /tmp/sam-harness-respuestas-v0.8.json
+sam-harness upgrade /ruta/al/repositorio --to 0.9.0 --answers /tmp/sam-harness-respuestas-v0.9.json
 ```
 
 `upgrade` combina las respuestas explícitas con la configuración instalada y produce un plan con caducidad; no lo aplica. Revisa las decisiones pendientes y todas las operaciones, después aprueba y aplica el nuevo ID exacto. Usa la [estructura de configuración del workflow](../skills/sam-harness/references/workflow-configuration.md) para la cobertura de guards `static`/`test`, las decisiones sobre nombres de secretos, entorno protegido de agentes y control plane del proveedor, las atestaciones del filesystem y del comando confiable, y los comandos del ciclo que una configuración heredada de producción v0.1 no contiene.

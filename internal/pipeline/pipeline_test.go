@@ -424,8 +424,36 @@ printf '%s:%s\n' "$1" "$2" >> "$3"
 	}
 }
 
+func TestE2EPhaseRunsOnlyTheSelectedConfiguredGate(t *testing.T) {
+	root := t.TempDir()
+	gateLog := filepath.Join(t.TempDir(), "e2e.log")
+	writeExecutable(t, root, "e2e.sh", "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$2\"\n")
+	cfg := testPipelineConfig()
+	cfg.Gates = []model.Gate{
+		{Name: "browser-full", Stage: "ci", Phase: model.PhaseE2E, Workdir: ".", Command: []string{"./e2e.sh", "full", gateLog}, Required: true},
+		{Name: "browser-sso", Stage: "ci", Phase: model.PhaseE2E, Workdir: ".", Command: []string{"./e2e.sh", "sso", gateLog}, Required: true},
+	}
+	writePipelineConfig(t, root, cfg)
+
+	receipt, _, err := RunWithOptions(root, model.PhaseE2E, false, RunOptions{Gate: "browser-sso"})
+	if err != nil {
+		t.Fatalf("selected e2e gate failed: %v\n%#v", err, receipt)
+	}
+	if !receipt.Passed || len(receipt.Commands) != 1 || receipt.Commands[0].Name != "browser-sso" || receipt.Commands[0].Phase != model.PhaseE2E {
+		t.Fatalf("selected e2e receipt = %#v", receipt)
+	}
+	if log := readFile(t, gateLog); log != "sso\n" {
+		t.Fatalf("unselected e2e gate ran: %q", log)
+	}
+
+	receipt, _, err = RunWithOptions(root, model.PhaseE2E, false, RunOptions{Gate: "missing"})
+	if err == nil || receipt.Passed || !strings.Contains(err.Error(), `e2e gate "missing" is not configured`) {
+		t.Fatalf("missing e2e gate was accepted: err=%v receipt=%#v", err, receipt)
+	}
+}
+
 func TestPhaseBlocksStaticOrTestCommandRepositoryMutation(t *testing.T) {
-	for _, phase := range []model.Phase{model.PhaseStatic, model.PhaseTest} {
+	for _, phase := range []model.Phase{model.PhaseStatic, model.PhaseTest, model.PhaseE2E} {
 		t.Run(string(phase), func(t *testing.T) {
 			root := t.TempDir()
 			writeExecutable(t, root, "mutate.sh", "#!/bin/sh\nprintf 'mutation\\n' > changed.txt\n")

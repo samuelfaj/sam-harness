@@ -850,6 +850,19 @@ func TestParseAllowsTargetHelpersWithoutProviderBoundSecrets(t *testing.T) {
 	}
 }
 
+func TestCurrentConfigRejectsE2EInsideTestGuardsButLegacyConfigStillLoads(t *testing.T) {
+	t.Parallel()
+	cfg := validProductionConfig()
+	cfg.Workflow.TestGuards.Waivers[model.GuardE2E] = "legacy e2e coverage"
+	if _, err := Parse(mustMarshalYAML(t, cfg)); err == nil || !strings.Contains(err.Error(), `test guard waiver has unknown category "e2e"`) {
+		t.Fatalf("current config kept e2e inside test guards: %v", err)
+	}
+	cfg.HarnessVersion = "0.8.8"
+	if _, err := Parse(mustMarshalYAML(t, cfg)); err != nil {
+		t.Fatalf("legacy e2e test guard no longer loads for upgrade: %v", err)
+	}
+}
+
 func validConfig() model.Config {
 	return model.Config{
 		SchemaVersion:  model.SchemaVersion,

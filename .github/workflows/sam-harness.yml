@@ -133,9 +133,30 @@ jobs:
       - name: Preserve the failed phase status
         if: steps.phase.outcome == 'failure'
         run: exit 1
-  artifact:
+  e2e:
     runs-on: ubuntu-latest
     needs: test
+    if: github.event_name != 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.27.0"
+      - name: Run e2e phase
+        run: 'go run ./cmd/sam-harness pipeline . --phase e2e --receipt true'
+      - name: Preserve phase receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sam-harness-receipts-e2e
+          if-no-files-found: error
+          path: .sam-harness/evidence/
+  artifact:
+    runs-on: ubuntu-latest
+    needs: e2e
     if: github.event_name != 'workflow_dispatch'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

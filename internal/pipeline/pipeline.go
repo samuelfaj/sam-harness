@@ -166,6 +166,7 @@ type commandExecution struct {
 
 type RunOptions struct {
 	ConfigPath         string
+	Gate               string
 	ReviewBase         string
 	ReviewBaseSHA      string
 	ReviewHeadSHA      string
@@ -175,6 +176,7 @@ type RunOptions struct {
 
 type phaseContext struct {
 	config             configEvidence
+	gate               string
 	reviewBase         string
 	reviewBaseSHA      string
 	reviewHeadSHA      string
@@ -203,6 +205,9 @@ func RunWithOptions(path string, phase model.Phase, writeReceipt bool, options R
 	if !phase.Valid() {
 		return Receipt{}, "", fmt.Errorf("pipeline phase %q is invalid", phase)
 	}
+	if strings.TrimSpace(options.Gate) != "" && phase != model.PhaseE2E {
+		return Receipt{}, "", errors.New("--gate is only valid for e2e")
+	}
 	if strings.TrimSpace(options.ReviewBase) != "" && phase != model.PhaseReview && phase != model.PhaseAll {
 		return Receipt{}, "", errors.New("--review-base is only valid for review or all")
 	}
@@ -226,6 +231,7 @@ func RunWithOptions(path string, phase model.Phase, writeReceipt bool, options R
 	}
 	context := phaseContext{
 		config:             configEvidence,
+		gate:               strings.TrimSpace(options.Gate),
 		reviewBase:         options.ReviewBase,
 		reviewBaseSHA:      normalizedBaseSHA,
 		reviewHeadSHA:      normalizedHeadSHA,
@@ -326,7 +332,7 @@ func runPhaseWithContext(root string, cfg model.Config, phase model.Phase, finge
 	receipt := newReceipt(root, phase, fingerprint)
 	receipt.Repository = cfg.Repository
 	err := authorizePhase(cfg, phase)
-	if err == nil && phase != model.PhaseStatic && phase != model.PhaseTest {
+	if err == nil && phase != model.PhaseStatic && phase != model.PhaseTest && phase != model.PhaseE2E {
 		err = runReadOnlyConfiguredGates(root, cfg, phase, &receipt)
 	}
 	if err != nil {
@@ -336,8 +342,8 @@ func runPhaseWithContext(root string, cfg model.Config, phase model.Phase, finge
 		return receipt, err
 	}
 	switch phase {
-	case model.PhaseStatic, model.PhaseTest:
-		err = runReadOnlyGatePhase(root, cfg, phase, &receipt)
+	case model.PhaseStatic, model.PhaseTest, model.PhaseE2E:
+		err = runReadOnlyGatePhase(root, cfg, phase, context.gate, &receipt)
 	case model.PhaseReview:
 		err = runReview(root, cfg, context, &receipt)
 	case model.PhaseArtifact:
@@ -403,12 +409,12 @@ func authorizePhase(cfg model.Config, phase model.Phase) error {
 	return nil
 }
 
-func runReadOnlyGatePhase(root string, cfg model.Config, phase model.Phase, receipt *Receipt) error {
+func runReadOnlyGatePhase(root string, cfg model.Config, phase model.Phase, gate string, receipt *Receipt) error {
 	before, err := repositoryFingerprint(root, cfg)
 	if err != nil {
 		return fmt.Errorf("%s phase fingerprint before commands: %w", phase, err)
 	}
-	runErr := runGatePhase(root, cfg, phase, receipt)
+	runErr := runGatePhase(root, cfg, phase, gate, receipt)
 	after, err := repositoryFingerprint(root, cfg)
 	if err != nil {
 		return fmt.Errorf("%s phase fingerprint after commands: %w", phase, err)
@@ -490,6 +496,9 @@ func finishRun(root string, cfg model.Config, evidence configEvidence, receipt R
 
 func allPhases(cfg model.Config) []model.Phase {
 	phases := []model.Phase{model.PhaseStatic, model.PhaseTest}
+	if hasConfiguredGate(cfg, model.PhaseE2E) {
+		phases = append(phases, model.PhaseE2E)
+	}
 	if cfg.Workflow == nil || !cfg.Workflow.Enabled {
 		return phases
 	}
@@ -521,17 +530,29 @@ func requireWorkflow(cfg model.Config, phase model.Phase) (*model.WorkflowConfig
 	return cfg.Workflow, nil
 }
 
-func runGatePhase(root string, cfg model.Config, phase model.Phase, receipt *Receipt) error {
-	failed := runConfiguredGates(root, cfg, phase, receipt) != nil
-	if cfg.Workflow != nil && cfg.Workflow.Enabled {
-		guards := cfg.Workflow.StaticGuards
-		categories := model.StaticGuardCategories
-		if phase == model.PhaseTest {
-			guards = cfg.Workflow.TestGuards
-			categories = model.TestGuardCategories
+func runGatePhase(root string, cfg model.Config, phase model.Phase, gate string, receipt *Receipt) error {
+	if phase == model.PhaseE2E && !hasConfiguredGateNamed(cfg, phase, gate) {
+		if gate != "" {
+			return fmt.Errorf("e2e gate %q is not configured", gate)
 		}
-		if err := runGuards(root, phase, guards, categories, receipt); err != nil {
-			failed = true
+		return errors.New("e2e phase requires at least one configured gate")
+	}
+	failed := runConfiguredGatesFor(root, cfg, phase, gate, receipt) != nil
+	if cfg.Workflow != nil && cfg.Workflow.Enabled {
+		var guards model.GuardSet
+		var categories []string
+		switch phase {
+		case model.PhaseStatic:
+			guards = cfg.Workflow.StaticGuards
+			categories = model.StaticGuardCategories
+		case model.PhaseTest:
+			guards = cfg.Workflow.TestGuards
+			categories = testGuardCategories(cfg)
+		}
+		if len(categories) > 0 {
+			if err := runGuards(root, phase, guards, categories, receipt); err != nil {
+				failed = true
+			}
 		}
 	}
 	if failed {
@@ -541,6 +562,10 @@ func runGatePhase(root string, cfg model.Config, phase model.Phase, receipt *Rec
 }
 
 func runConfiguredGates(root string, cfg model.Config, phase model.Phase, receipt *Receipt) error {
+	return runConfiguredGatesFor(root, cfg, phase, "", receipt)
+}
+
+func runConfiguredGatesFor(root string, cfg model.Config, phase model.Phase, selected string, receipt *Receipt) error {
 	failed := false
 	for _, gate := range cfg.Gates {
 		gatePhase := gate.Phase
@@ -548,6 +573,9 @@ func runConfiguredGates(root string, cfg model.Config, phase model.Phase, receip
 			gatePhase = model.PhaseStatic
 		}
 		if gatePhase != phase {
+			continue
+		}
+		if selected != "" && gate.Name != selected {
 			continue
 		}
 		spec := model.CommandSpec{
@@ -567,6 +595,36 @@ func runConfiguredGates(root string, cfg model.Config, phase model.Phase, receip
 		return fmt.Errorf("one or more required %s gates failed", phase)
 	}
 	return nil
+}
+
+func hasConfiguredGate(cfg model.Config, phase model.Phase) bool {
+	return hasConfiguredGateNamed(cfg, phase, "")
+}
+
+func hasConfiguredGateNamed(cfg model.Config, phase model.Phase, name string) bool {
+	for _, gate := range cfg.Gates {
+		gatePhase := gate.Phase
+		if gatePhase == "" {
+			gatePhase = model.PhaseStatic
+		}
+		if gatePhase == phase && (name == "" || gate.Name == name) {
+			return true
+		}
+	}
+	return false
+}
+
+func testGuardCategories(cfg model.Config) []string {
+	categories := model.TestGuardCategories
+	if cfg.HarnessVersion == model.HarnessVersion || cfg.Workflow == nil {
+		return categories
+	}
+	_, hasCommand := cfg.Workflow.TestGuards.Commands[model.GuardE2E]
+	_, hasWaiver := cfg.Workflow.TestGuards.Waivers[model.GuardE2E]
+	if hasCommand || hasWaiver {
+		return append(append([]string(nil), categories...), model.GuardE2E)
+	}
+	return categories
 }
 
 func runGuards(root string, phase model.Phase, guards model.GuardSet, categories []string, receipt *Receipt) error {

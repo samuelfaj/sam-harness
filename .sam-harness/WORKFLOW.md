@@ -7,6 +7,7 @@
 - static `go:.:build` in `.`: `'go' 'build' './...'`
 - static `go:.:typecheck` in `.`: `'go' 'vet' './...'`
 - test `go:.:test` in `.`: `'go' 'test' './...'`
+- e2e `complete customer installation lifecycle` in `.`: `'sh' 'testdata/e2e-full-flow.sh'`
 
 ## Static guard command-or-waiver inventory
 
@@ -27,7 +28,6 @@
 - business_invariants command `authority, evidence and book traceability invariants` in `.` (900s): `'go' 'test' './internal/pipeline' './internal/apply' './internal/traceability'`
 - property waiver: No stable generative-property harness is configured; boundary behavior is covered by table-driven unit tests.
 - mutation waiver: No Go mutation-testing tool is currently part of the supported toolchain; security and failure-path tests are explicit release gates.
-- e2e command `complete customer installation lifecycle` in `.` (1200s): `'sh' 'testdata/e2e-full-flow.sh'`
 - performance waiver: The CLI has no published latency or throughput SLO yet; a performance gate will be added when a measurable budget is adopted.
 
 ## Artifact and promotion
