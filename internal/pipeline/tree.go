@@ -22,6 +22,11 @@ type fileState struct {
 	link string
 }
 
+type ignoredPathSet struct {
+	files map[string]bool
+	dirs  []string
+}
+
 func artifactOutputPaths(artifact model.ArtifactWorkflow) []string {
 	return []string{artifact.ArtifactPath, artifact.SBOMPath, artifact.ProvenancePath}
 }
@@ -51,8 +56,15 @@ func sourceSnapshot(root string, excludedPaths []string) (map[string]fileState, 
 	if err != nil {
 		return nil, err
 	}
+	gitIgnored, err := gitIgnoredSourcePaths(root)
+	if err != nil {
+		return nil, err
+	}
 	snapshot, err := snapshotRepository(root, func(relative string, entry os.DirEntry) bool {
 		if relative == ".git" || relative == ".sam-harness/evidence" {
+			return true
+		}
+		if gitIgnored.contains(relative) {
 			return true
 		}
 		if ignoredGeneratedSourceEntry(relative, entry) {
@@ -87,10 +99,59 @@ func ignoredGeneratedSourceEntry(relative string, entry os.DirEntry) bool {
 	return clean == ".husky/_" || strings.HasSuffix(clean, "/.husky/_")
 }
 
+func gitIgnoredSourcePaths(root string) (ignoredPathSet, error) {
+	result := ignoredPathSet{files: map[string]bool{}}
+	if _, err := os.Lstat(filepath.Join(root, ".git")); os.IsNotExist(err) {
+		return result, nil
+	} else if err != nil {
+		return result, err
+	}
+	probe := exec.Command("git", "rev-parse", "--is-inside-work-tree")
+	probe.Dir = root
+	output, err := probe.Output()
+	if err != nil || strings.TrimSpace(string(output)) != "true" {
+		return result, nil
+	}
+	command := exec.Command("git", "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z")
+	command.Dir = root
+	output, err = command.Output()
+	if err != nil {
+		return result, fmt.Errorf("list Git-ignored source paths: %w", err)
+	}
+	for _, raw := range bytes.Split(output, []byte{0}) {
+		path := filepath.ToSlash(string(raw))
+		if path == "" {
+			continue
+		}
+		if strings.HasSuffix(path, "/") {
+			result.dirs = append(result.dirs, path)
+			continue
+		}
+		result.files[path] = true
+	}
+	return result, nil
+}
+
+func (paths ignoredPathSet) contains(relative string) bool {
+	if paths.files[relative] {
+		return true
+	}
+	for _, directory := range paths.dirs {
+		if strings.HasPrefix(relative, directory) {
+			return true
+		}
+	}
+	return false
+}
+
 func snapshotRepairWorktree(root, evidenceDirectory string) (map[string]fileState, error) {
 	evidence := filepath.ToSlash(filepath.Clean(filepath.FromSlash(evidenceDirectory)))
+	gitIgnored, err := gitIgnoredSourcePaths(root)
+	if err != nil {
+		return nil, err
+	}
 	return snapshotRepository(root, func(relative string, entry os.DirEntry) bool {
-		return relative == ".git" || relative == evidence || relative == ".sam-harness/evidence" || ignoredGeneratedSourceEntry(relative, entry) || (entry.IsDir() && ignoredSourceDirectory(entry.Name()))
+		return relative == ".git" || relative == evidence || relative == ".sam-harness/evidence" || gitIgnored.contains(relative) || ignoredGeneratedSourceEntry(relative, entry) || (entry.IsDir() && ignoredSourceDirectory(entry.Name()))
 	})
 }
 
