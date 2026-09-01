@@ -109,6 +109,45 @@ func TestSourceFingerprintUsesGitSourceBoundary(t *testing.T) {
 	}
 }
 
+func TestReviewSandboxPreservesTrackedIgnoredSourceFingerprint(t *testing.T) {
+	root := t.TempDir()
+	writeTreeTestFile(t, root, ".gitignore", ".generated/\n")
+	writeTreeTestFile(t, root, "source.go", "package fixture\n")
+	writeTreeTestFile(t, root, ".generated/tracked.json", "tracked\n")
+	writeTreeTestFile(t, root, ".generated/runner-cache.json", "ignored\n")
+	runTreeTestGit(t, root, "init", "-q")
+	runTreeTestGit(t, root, "add", ".gitignore", "source.go")
+	runTreeTestGit(t, root, "add", "--force", ".generated/tracked.json")
+
+	snapshot, err := sourceSnapshot(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := snapshot[".generated/tracked.json"]; !ok {
+		t.Fatal("tracked ignored source is missing from source snapshot")
+	}
+	if _, ok := snapshot[".generated/runner-cache.json"]; ok {
+		t.Fatal("untracked ignored runner state is present in source snapshot")
+	}
+
+	sandbox := t.TempDir()
+	change := reviewChangeEvidence{
+		baseRoot:     root,
+		baseSnapshot: snapshot,
+		headSnapshot: snapshot,
+	}
+	if err := prepareReviewSandbox(root, sandbox, change); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := sourceFingerprint(sandbox, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expected := fingerprintSnapshot(snapshot); actual != expected {
+		t.Fatalf("review sandbox fingerprint = %s, want %s", actual, expected)
+	}
+}
+
 func writeTreeTestFile(t *testing.T, root, relative, content string) {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(relative))

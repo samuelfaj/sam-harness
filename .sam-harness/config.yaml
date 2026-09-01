@@ -1,5 +1,5 @@
 schema_version: "1"
-harness_version: 0.8.2
+harness_version: 0.8.3
 profile: production
 repository: sam-harness
 stacks:
