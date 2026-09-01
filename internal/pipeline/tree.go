@@ -298,7 +298,7 @@ func fingerprintSnapshot(snapshot map[string]fileState) string {
 		state := snapshot[path]
 		_, _ = io.WriteString(hash, path)
 		_, _ = io.WriteString(hash, "\x00")
-		_, _ = io.WriteString(hash, state.mode.String())
+		_, _ = io.WriteString(hash, fingerprintFileMode(state.mode))
 		_, _ = io.WriteString(hash, "\x00")
 		_, _ = io.WriteString(hash, state.link)
 		_, _ = io.WriteString(hash, "\x00")
@@ -306,6 +306,16 @@ func fingerprintSnapshot(snapshot map[string]fileState) string {
 		_, _ = io.WriteString(hash, "\x00")
 	}
 	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func fingerprintFileMode(mode os.FileMode) string {
+	if mode&os.ModeSymlink != 0 {
+		return "symlink"
+	}
+	if mode.Perm()&0o111 != 0 {
+		return "executable"
+	}
+	return "file"
 }
 
 func snapshotsEqual(left, right map[string]fileState) bool {
