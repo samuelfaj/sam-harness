@@ -52,12 +52,15 @@ jobs:
         id: phase
         continue-on-error: true
         run: |
+          phase_output="$(mktemp)"
+          trap 'rm -f "$phase_output"' EXIT
           set +e
-          output="$(go run ./cmd/sam-harness pipeline . --config "${GITHUB_WORKSPACE}/.sam-harness/evidence/trusted-control/.sam-harness/config.yaml" --phase static --receipt true 2>&1)"
-          status=$?
+          go run ./cmd/sam-harness pipeline . --config "${GITHUB_WORKSPACE}/.sam-harness/evidence/trusted-control/.sam-harness/config.yaml" --phase static --receipt true 2>&1 | tee "$phase_output"
+          pipeline_status=("${PIPESTATUS[@]}")
           set -e
-          printf '%s\n' "$output"
-          receipt="$(printf '%s\n' "$output" | sed -n 's/^Receipt: //p' | tail -n 1)"
+          test "${pipeline_status[1]}" -eq 0
+          status="${pipeline_status[0]}"
+          receipt="$(sed -n 's/^Receipt: //p' "$phase_output" | tail -n 1)"
           test -n "$receipt"
           test -f "$receipt"
           receipt_html="${receipt%.json}.html"
@@ -102,12 +105,15 @@ jobs:
         id: phase
         continue-on-error: true
         run: |
+          phase_output="$(mktemp)"
+          trap 'rm -f "$phase_output"' EXIT
           set +e
-          output="$(go run ./cmd/sam-harness pipeline . --config "${GITHUB_WORKSPACE}/.sam-harness/evidence/trusted-control/.sam-harness/config.yaml" --phase test --receipt true 2>&1)"
-          status=$?
+          go run ./cmd/sam-harness pipeline . --config "${GITHUB_WORKSPACE}/.sam-harness/evidence/trusted-control/.sam-harness/config.yaml" --phase test --receipt true 2>&1 | tee "$phase_output"
+          pipeline_status=("${PIPESTATUS[@]}")
           set -e
-          printf '%s\n' "$output"
-          receipt="$(printf '%s\n' "$output" | sed -n 's/^Receipt: //p' | tail -n 1)"
+          test "${pipeline_status[1]}" -eq 0
+          status="${pipeline_status[0]}"
+          receipt="$(sed -n 's/^Receipt: //p' "$phase_output" | tail -n 1)"
           test -n "$receipt"
           test -f "$receipt"
           receipt_html="${receipt%.json}.html"
@@ -152,12 +158,15 @@ jobs:
         id: phase
         continue-on-error: true
         run: |
+          phase_output="$(mktemp)"
+          trap 'rm -f "$phase_output"' EXIT
           set +e
-          output="$(go run ./cmd/sam-harness pipeline . --config "${GITHUB_WORKSPACE}/.sam-harness/evidence/trusted-control/.sam-harness/config.yaml" --phase artifact --receipt true 2>&1)"
-          status=$?
+          go run ./cmd/sam-harness pipeline . --config "${GITHUB_WORKSPACE}/.sam-harness/evidence/trusted-control/.sam-harness/config.yaml" --phase artifact --receipt true 2>&1 | tee "$phase_output"
+          pipeline_status=("${PIPESTATUS[@]}")
           set -e
-          printf '%s\n' "$output"
-          receipt="$(printf '%s\n' "$output" | sed -n 's/^Receipt: //p' | tail -n 1)"
+          test "${pipeline_status[1]}" -eq 0
+          status="${pipeline_status[0]}"
+          receipt="$(sed -n 's/^Receipt: //p' "$phase_output" | tail -n 1)"
           test -n "$receipt"
           test -f "$receipt"
           receipt_html="${receipt%.json}.html"

@@ -213,6 +213,9 @@ func TestBuildSelfRepositoryUsesLocalHarnessCommand(t *testing.T) {
 		if !strings.Contains(content, "go run ./cmd/sam-harness pipeline .") {
 			t.Fatalf("self-hosted credential-free phases in %s do not use the checked-out harness command:\n%s", path, content)
 		}
+		if path == ".github/workflows/sam-harness.yml" && (!strings.Contains(content, `phase_output="$(mktemp)"`) || !strings.Contains(content, `| tee "$phase_output"`)) {
+			t.Fatalf("self-hosted GitHub phases in %s do not stream command output while retaining receipt discovery:\n%s", path, content)
+		}
 	}
 	dispatcher := operationContent(t, operations, ".github/workflows/sam-harness-merge-queue-dispatch.yml")
 	if !strings.Contains(dispatcher, "merge_group:") || !strings.Contains(dispatcher, "sam_harness_merge_group_review") || strings.Contains(dispatcher, "pull_request_target:") {

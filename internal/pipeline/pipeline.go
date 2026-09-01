@@ -1300,9 +1300,13 @@ func executeCommand(root string, phase model.Phase, spec model.CommandSpec, stdi
 	cmd.Stdin = bytes.NewReader(stdin)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdoutStream := newLiveCommandOutputWriter(&stdout, progress, secrets)
+	stderrStream := newLiveCommandOutputWriter(&stderr, progress, secrets)
+	cmd.Stdout = stdoutStream
+	cmd.Stderr = stderrStream
 	err = cmd.Run()
+	stdoutStream.Flush()
+	stderrStream.Flush()
 	stdoutText := stdout.String()
 	stderrText := stderr.String()
 	result.Output = truncate(strings.TrimSpace(stdoutText + "\n" + stderrText))
@@ -1321,6 +1325,77 @@ func executeCommand(root string, phase model.Phase, spec model.CommandSpec, stdi
 		result.Output = strings.TrimSpace(result.Output + "\n" + err.Error())
 	}
 	return commandExecution{result: result, stdout: stdoutText, stderr: stderrText}
+}
+
+type liveCommandOutputWriter struct {
+	capture  io.Writer
+	progress io.Writer
+	secrets  []string
+	pending  []byte
+}
+
+func newLiveCommandOutputWriter(capture, progress io.Writer, secrets []string) *liveCommandOutputWriter {
+	return &liveCommandOutputWriter{
+		capture:  capture,
+		progress: progress,
+		secrets:  secrets,
+	}
+}
+
+func (writer *liveCommandOutputWriter) Write(value []byte) (int, error) {
+	written, err := writer.capture.Write(value)
+	if err != nil {
+		return written, err
+	}
+	writer.pending = append(writer.pending, value...)
+	writer.flush(false)
+	return written, nil
+}
+
+func (writer *liveCommandOutputWriter) Flush() {
+	writer.flush(true)
+}
+
+func (writer *liveCommandOutputWriter) flush(force bool) {
+	if len(writer.pending) == 0 {
+		return
+	}
+	keep := 0
+	if !force {
+		keep = longestSecretPrefixSuffix(writer.pending, writer.secrets)
+	}
+	flushLength := len(writer.pending) - keep
+	if flushLength == 0 {
+		return
+	}
+	writeCommandOutput(writer.progress, []byte(redactSensitiveValues(string(writer.pending[:flushLength]), writer.secrets)))
+	writer.pending = append([]byte(nil), writer.pending[flushLength:]...)
+}
+
+func longestSecretPrefixSuffix(value []byte, secrets []string) int {
+	longest := 0
+	for _, secret := range secrets {
+		maxLength := len(secret) - 1
+		if maxLength > len(value) {
+			maxLength = len(value)
+		}
+		for length := maxLength; length > longest; length-- {
+			if strings.HasSuffix(string(value), secret[:length]) {
+				longest = length
+				break
+			}
+		}
+	}
+	return longest
+}
+
+func writeCommandOutput(writer io.Writer, value []byte) {
+	if writer == nil || len(value) == 0 {
+		return
+	}
+	progressMu.Lock()
+	defer progressMu.Unlock()
+	_, _ = writer.Write(value)
 }
 
 func commandProgressWriter() io.Writer {

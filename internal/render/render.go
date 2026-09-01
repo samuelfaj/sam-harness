@@ -1456,11 +1456,11 @@ func writeGitHubTrustedReviewControlPlane(builder *strings.Builder, cfg model.Co
 	builder.WriteString("        run: |\n          set -eu\n")
 	writeGitHubSecretGuards(builder, cfg, model.CISecretScopeReview, "          ")
 	trustedReview := trustedReviewCommand(cfg, `"${{ needs.resolve.outputs.base_sha }}"`, `"${{ needs.resolve.outputs.head_sha }}"`)
-	builder.WriteString("          set +e\n          prior_review_receipt=\"\"\n          if [ -d \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" ]; then\n            prior_review_count=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print | wc -l | tr -d '[:space:]')\"\n            test \"$prior_review_count\" -eq 1\n            prior_review_receipt=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print)\"\n          fi\n          if [ -n \"$prior_review_receipt\" ]; then\n            output=\"$(" + trustedReview + " --prior-review-receipt \"$prior_review_receipt\" 2>&1)\"\n          else\n            output=\"$(" + trustedReview + " 2>&1)\"\n          fi\n")
-	builder.WriteString(`          status=$?
+	builder.WriteString("          phase_output=\"$(mktemp)\"\n          trap 'rm -f \"$phase_output\"' EXIT\n          set +e\n          prior_review_receipt=\"\"\n          if [ -d \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" ]; then\n            prior_review_count=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print | wc -l | tr -d '[:space:]')\"\n            test \"$prior_review_count\" -eq 1\n            prior_review_receipt=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print)\"\n          fi\n          if [ -n \"$prior_review_receipt\" ]; then\n            " + trustedReview + " --prior-review-receipt \"$prior_review_receipt\" 2>&1 | tee \"$phase_output\"\n            pipeline_status=(\"${PIPESTATUS[@]}\")\n          else\n            " + trustedReview + " 2>&1 | tee \"$phase_output\"\n            pipeline_status=(\"${PIPESTATUS[@]}\")\n          fi\n")
+	builder.WriteString(`          status="${pipeline_status[0]}"
           set -e
-          printf '%s\n' "$output"
-          receipt="$(printf '%s\n' "$output" | sed -n 's/^Receipt: //p' | tail -n 1)"
+          test "${pipeline_status[1]}" -eq 0
+          receipt="$(sed -n 's/^Receipt: //p' "$phase_output" | tail -n 1)"
           test -n "$receipt"
           test -f "$receipt"
           review_patch="$(jq -r '.review_patch // empty' "$receipt")"
@@ -1862,12 +1862,15 @@ func writeGitHubPhaseJob(builder *strings.Builder, cfg model.Config, job string,
 
 func writeGitHubCapturedPipelineCommand(builder *strings.Builder, command string) {
 	builder.WriteString(`        run: |
+          phase_output="$(mktemp)"
+          trap 'rm -f "$phase_output"' EXIT
           set +e
-          output="$(` + command + ` 2>&1)"
-          status=$?
+          ` + command + ` 2>&1 | tee "$phase_output"
+          pipeline_status=("${PIPESTATUS[@]}")
           set -e
-          printf '%s\n' "$output"
-          receipt="$(printf '%s\n' "$output" | sed -n 's/^Receipt: //p' | tail -n 1)"
+          test "${pipeline_status[1]}" -eq 0
+          status="${pipeline_status[0]}"
+          receipt="$(sed -n 's/^Receipt: //p' "$phase_output" | tail -n 1)"
           test -n "$receipt"
           test -f "$receipt"
           receipt_html="${receipt%.json}.html"
@@ -1902,11 +1905,11 @@ func writeGitHubReviewJob(builder *strings.Builder, cfg model.Config) {
 	builder.WriteString("        run: |\n          set -eu\n")
 	writeGitHubSecretGuards(builder, cfg, model.CISecretScopeReview, "          ")
 	trustedReview := trustedPipelineCommand(cfg, model.PhaseReview)
-	builder.WriteString("          set +e\n          prior_review_receipt=\"\"\n          if [ -d \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" ]; then\n            prior_review_count=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print | wc -l | tr -d '[:space:]')\"\n            test \"$prior_review_count\" -eq 1\n            prior_review_receipt=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print)\"\n          fi\n          if [ -n \"$prior_review_receipt\" ]; then\n            output=\"$(" + trustedReview + " --prior-review-receipt \"$prior_review_receipt\" 2>&1)\"\n          else\n            output=\"$(" + trustedReview + " 2>&1)\"\n          fi\n")
-	builder.WriteString(`          status=$?
+	builder.WriteString("          phase_output=\"$(mktemp)\"\n          trap 'rm -f \"$phase_output\"' EXIT\n          set +e\n          prior_review_receipt=\"\"\n          if [ -d \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" ]; then\n            prior_review_count=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print | wc -l | tr -d '[:space:]')\"\n            test \"$prior_review_count\" -eq 1\n            prior_review_receipt=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print)\"\n          fi\n          if [ -n \"$prior_review_receipt\" ]; then\n            " + trustedReview + " --prior-review-receipt \"$prior_review_receipt\" 2>&1 | tee \"$phase_output\"\n            pipeline_status=(\"${PIPESTATUS[@]}\")\n          else\n            " + trustedReview + " 2>&1 | tee \"$phase_output\"\n            pipeline_status=(\"${PIPESTATUS[@]}\")\n          fi\n")
+	builder.WriteString(`          status="${pipeline_status[0]}"
           set -e
-          printf '%s\n' "$output"
-          receipt="$(printf '%s\n' "$output" | sed -n 's/^Receipt: //p' | tail -n 1)"
+          test "${pipeline_status[1]}" -eq 0
+          receipt="$(sed -n 's/^Receipt: //p' "$phase_output" | tail -n 1)"
           test -n "$receipt"
           test -f "$receipt"
           review_patch="$(sed -n 's/^[[:space:]]*"review_patch":[[:space:]]*"\([^"]*\)"[,]\{0,1\}[[:space:]]*$/\1/p' "$receipt")"

@@ -19,10 +19,12 @@ import (
 )
 
 type progressProbe struct {
-	mu      sync.Mutex
-	buffer  bytes.Buffer
-	started chan struct{}
-	once    sync.Once
+	mu         sync.Mutex
+	buffer     bytes.Buffer
+	started    chan struct{}
+	outputSeen chan struct{}
+	once       sync.Once
+	outputOnce sync.Once
 }
 
 func (probe *progressProbe) Write(value []byte) (int, error) {
@@ -31,6 +33,9 @@ func (probe *progressProbe) Write(value []byte) (int, error) {
 	written, err := probe.buffer.Write(value)
 	if bytes.Contains(value, []byte("command start")) {
 		probe.once.Do(func() { close(probe.started) })
+	}
+	if bytes.Contains(value, []byte("still-running")) && probe.outputSeen != nil {
+		probe.outputOnce.Do(func() { close(probe.outputSeen) })
 	}
 	return written, err
 }
@@ -103,7 +108,7 @@ printf 'static ran\n'
 	}
 }
 
-func TestExecuteEmitsSanitizedProgressWithoutStreamingCommandOutput(t *testing.T) {
+func TestExecuteEmitsSanitizedProgressAndStreamsCommandOutput(t *testing.T) {
 	root := t.TempDir()
 	var progress bytes.Buffer
 	execution := executeCommand(root, model.PhaseTest, model.CommandSpec{
@@ -128,29 +133,55 @@ func TestExecuteEmitsSanitizedProgressWithoutStreamingCommandOutput(t *testing.T
 	output := progress.String()
 	for _, expected := range []string{
 		`sam-harness: command start phase="test" name="safe [REDACTED] injected"`,
+		`raw [REDACTED]`,
 		`sam-harness: command fail phase="test" name="safe [REDACTED] injected" duration=`,
+		`raw success`,
 		`sam-harness: command pass phase="test" name="success" duration=`,
 	} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("progress missing %q:\n%s", expected, output)
 		}
 	}
-	for _, forbidden := range []string{"super-secret", "raw super-secret", "raw success", "\ninjected\n"} {
+	for _, forbidden := range []string{"super-secret", "raw super-secret", "\ninjected\n"} {
 		if strings.Contains(output, forbidden) {
 			t.Fatalf("progress exposed %q:\n%s", forbidden, output)
 		}
 	}
 }
 
+func TestLiveCommandOutputWriterRedactsSecretsAcrossWrites(t *testing.T) {
+	var captured bytes.Buffer
+	var visible bytes.Buffer
+	writer := newLiveCommandOutputWriter(&captured, &visible, []string{"super-secret"})
+
+	if _, err := writer.Write([]byte("prefix super-")); err != nil {
+		t.Fatal(err)
+	}
+	if visible.String() != "prefix " {
+		t.Fatalf("partial secret was not held safely: %q", visible.String())
+	}
+	if _, err := writer.Write([]byte("secret suffix\n")); err != nil {
+		t.Fatal(err)
+	}
+	writer.Flush()
+
+	if captured.String() != "prefix super-secret suffix\n" {
+		t.Fatalf("captured output changed: %q", captured.String())
+	}
+	if visible.String() != "prefix [REDACTED] suffix\n" {
+		t.Fatalf("streamed output was not redacted: %q", visible.String())
+	}
+}
+
 func TestExecuteEmitsStartBeforeCommandCompletes(t *testing.T) {
 	root := t.TempDir()
-	progress := &progressProbe{started: make(chan struct{})}
+	progress := &progressProbe{started: make(chan struct{}), outputSeen: make(chan struct{})}
 	done := make(chan commandExecution, 1)
 	go func() {
 		done <- executeCommand(root, model.PhaseTest, model.CommandSpec{
 			Name:     "delayed super-secret",
 			Workdir:  ".",
-			Command:  []string{"sh", "-c", "sleep 1; printf 'raw super-secret'"},
+			Command:  []string{"sh", "-c", "printf 'still-running\\n'; sleep 1; printf 'raw super-secret\\n'"},
 			Required: true,
 		}, nil, []string{"PATH=" + os.Getenv("PATH"), "TOKEN=super-secret"}, nil, nil, progress)
 	}()
@@ -161,6 +192,11 @@ func TestExecuteEmitsStartBeforeCommandCompletes(t *testing.T) {
 		t.Fatal("start progress was not observable while the command was running")
 	}
 	select {
+	case <-progress.outputSeen:
+	case <-time.After(2 * time.Second):
+		t.Fatal("command output was not observable while the command was running")
+	}
+	select {
 	case <-done:
 		t.Fatal("command finished before start progress could be observed")
 	default:
@@ -168,6 +204,9 @@ func TestExecuteEmitsStartBeforeCommandCompletes(t *testing.T) {
 	visible := progress.String()
 	if !strings.Contains(visible, `command start phase="test" name="delayed [REDACTED]"`) {
 		t.Fatalf("start progress missing or unsanitized:\n%s", visible)
+	}
+	if !strings.Contains(visible, "still-running\n") {
+		t.Fatalf("live command output missing:\n%s", visible)
 	}
 	for _, forbidden := range []string{"super-secret", "raw super-secret"} {
 		if strings.Contains(visible, forbidden) {
@@ -179,6 +218,9 @@ func TestExecuteEmitsStartBeforeCommandCompletes(t *testing.T) {
 	case execution := <-done:
 		if !execution.result.Passed {
 			t.Fatalf("execution = %#v", execution.result)
+		}
+		if execution.stdout != "still-running\nraw super-secret\n" {
+			t.Fatalf("captured stdout was not preserved: %q", execution.stdout)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("command did not finish")

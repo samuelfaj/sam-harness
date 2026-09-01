@@ -1,7 +1,7 @@
 <!-- sam-harness:start -->
 ## Sam Harness
 
-This repository uses sam-harness 0.8.4 with the production profile.
+This repository uses sam-harness 0.8.5 with the production profile.
 
 Read these files before changing code:
 
