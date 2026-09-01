@@ -16,7 +16,7 @@ Run only the smallest phase that answers the user's request:
 | `production` | The configured production command promoted that same artifact path and digest. CI supplies the separate protected/manual approval evidence. |
 | `observe` | Configured technical and business observation commands passed for the interval they measured. |
 | `rollback` | The separately triggered manual rollback command ran; recovery and data compatibility still need their configured checks. |
-| `migration` | Configured migration and reconciliation commands passed. |
+| `migration` | The configured migration command passed; no unconfigured restore or reconciliation command is run implicitly. |
 | `all` | Each configured forward phase passed in order. Rollback is never part of `all`; receipts and approval boundaries remain separate. |
 
 Use:

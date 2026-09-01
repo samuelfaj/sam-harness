@@ -212,9 +212,6 @@ func validateSemantics(cfg model.Config) error {
 			return fmt.Errorf("validate config: stack %s cannot have external CI coverage and a command waiver", key)
 		}
 	}
-	if cfg.Migration.Required && (!cfg.Migration.ReconciliationGate || !cfg.Migration.RestoreTest) {
-		return fmt.Errorf("validate config: a required migration needs reconciliation and restore gates")
-	}
 	if cfg.Profile == model.ProfileProduction || cfg.Profile == model.ProfileRegulated {
 		if !cfg.Release.ImmutableArtifact || !cfg.Release.SBOM || !cfg.Release.Provenance || !cfg.Release.PromotionRequired || !cfg.CI.BranchProtectionRequired {
 			return fmt.Errorf("validate config: %s requires immutable artifacts, SBOM, provenance, promotion, and branch protection", cfg.Profile)

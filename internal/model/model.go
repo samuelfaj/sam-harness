@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-var HarnessVersion = "0.8.6"
+var HarnessVersion = "0.8.7"
 
 const SchemaVersion = "1"
 
@@ -464,6 +464,8 @@ type ReleaseConfig struct {
 }
 
 type MigrationConfig struct {
+	// ReconciliationGate and RestoreTest describe optional controls supplied by
+	// the repository's migration command; Sam Harness never runs them implicitly.
 	Required           bool `json:"required" yaml:"required"`
 	ReconciliationGate bool `json:"reconciliation_gate" yaml:"reconciliation_gate"`
 	RestoreTest        bool `json:"restore_test" yaml:"restore_test"`

@@ -63,7 +63,7 @@ This is also a bootstrap limit for the generated workflow that validates the Sam
 
 ## Command shape
 
-Artifact, deployment, health, observation, and migration commands use the same object:
+Artifact, deployment, health, observation, and migration commands use the same object. A migration command is the complete migration boundary: Sam Harness executes the declared command and never adds dump, restore, seed, reconciliation, or compatibility work implicitly. Those controls must be part of the declared command only when the repository explicitly requires them:
 
 ```json
 {

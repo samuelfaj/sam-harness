@@ -124,6 +124,23 @@ func TestParseRejectsProductionWithoutOperationalOwnership(t *testing.T) {
 	}
 }
 
+func TestParseAllowsCommandOnlyMigration(t *testing.T) {
+	t.Parallel()
+	cfg := validProductionConfig()
+	cfg.Migration = model.MigrationConfig{
+		Required:           true,
+		ReconciliationGate: false,
+		RestoreTest:        false,
+	}
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(data); err != nil {
+		t.Fatalf("Parse() rejected command-only migration: %v", err)
+	}
+}
+
 func TestParseRejectsPathsOutsideTheRepository(t *testing.T) {
 	t.Parallel()
 	cfg := validConfig()
