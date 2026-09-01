@@ -90,7 +90,7 @@ sam-harness freeze check [path] [--policy arquivo] [--now rfc3339] [--exception 
 sam-harness check [path] [--format human|json] [--receipt true|false]
 sam-harness doctor [path]
 sam-harness upgrade [path] --to <versão> [--answers <arquivo>] [--output <arquivo>]
-sam-harness pipeline [path] [--config <arquivo-absoluto-ou-contido>] [--review-base <diretório-absoluto> --review-base-sha <hex> --review-head-sha <hex>] --phase <static|test|review|artifact|staging|production|observe|rollback|migration|all> [--receipt true|false]
+sam-harness pipeline [path] [--config <arquivo-absoluto-ou-contido>] [--gate <nome>] [--review-base <diretório-absoluto> --review-base-sha <hex> --review-head-sha <hex>] --phase <static|test|e2e|review|artifact|staging|production|observe|rollback|migration|all> [--receipt true|false]
 sam-harness repair [path] [--config <arquivo-absoluto-ou-contido>] --receipt <arquivo> [--receipt-output true|false]
 ```
 
@@ -151,7 +151,7 @@ Se a publicação de change request estiver habilitada e autorizada separadament
 Para atualizar uma instalação legada de produção, informe as decisões obrigatórias do workflow da versão atual em um arquivo de respostas:
 
 ```bash
-sam-harness upgrade /caminho/do/repositorio --to 0.8.4 --answers /tmp/sam-harness-respostas-v0.8.json
+sam-harness upgrade /caminho/do/repositorio --to 0.9.0 --answers /tmp/sam-harness-respostas-v0.9.json
 ```
 
 `upgrade` combina as respostas explícitas com a configuração instalada e produz um plano com expiração; ele não aplica o plano. Revise decisões pendentes e todas as operações, depois aprove e aplique o novo ID exato. Use o [formato da configuração do workflow](../skills/sam-harness/references/workflow-configuration.md) para a cobertura de guards `static`/`test`, as decisões sobre nomes de secrets, ambiente protegido dos agentes e control plane do provedor, as atestações de filesystem e de comando confiável, e os comandos de ciclo que uma configuração legada de produção v0.1 não contém.

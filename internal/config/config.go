@@ -212,9 +212,6 @@ func validateSemantics(cfg model.Config) error {
 			return fmt.Errorf("validate config: stack %s cannot have external CI coverage and a command waiver", key)
 		}
 	}
-	if cfg.Migration.Required && (!cfg.Migration.ReconciliationGate || !cfg.Migration.RestoreTest) {
-		return fmt.Errorf("validate config: a required migration needs reconciliation and restore gates")
-	}
 	if cfg.Profile == model.ProfileProduction || cfg.Profile == model.ProfileRegulated {
 		if !cfg.Release.ImmutableArtifact || !cfg.Release.SBOM || !cfg.Release.Provenance || !cfg.Release.PromotionRequired || !cfg.CI.BranchProtectionRequired {
 			return fmt.Errorf("validate config: %s requires immutable artifacts, SBOM, provenance, promotion, and branch protection", cfg.Profile)
@@ -228,7 +225,11 @@ func validateSemantics(cfg model.Config) error {
 	}
 	requireWorkflow := (cfg.Profile == model.ProfileProduction || cfg.Profile == model.ProfileRegulated) && cfg.HarnessVersion == model.HarnessVersion
 	if cfg.Workflow != nil || requireWorkflow {
-		if err := ValidateWorkflow(cfg.Workflow, requireWorkflow); err != nil {
+		testGuardCategories := model.TestGuardCategories
+		if cfg.HarnessVersion != model.HarnessVersion && workflowHasTestE2E(cfg.Workflow) {
+			testGuardCategories = append(append([]string(nil), model.TestGuardCategories...), model.GuardE2E)
+		}
+		if err := validateWorkflow(cfg.Workflow, requireWorkflow, testGuardCategories); err != nil {
 			return fmt.Errorf("validate config: %s workflow: %w", cfg.Profile, err)
 		}
 		if cfg.Workflow != nil && cfg.Workflow.Correction.OpenChangeRequest && (!cfg.Authority.Network || !cfg.Authority.Commit || !cfg.Authority.Push) {
@@ -477,6 +478,7 @@ func validCISecretScope(scope string) bool {
 	switch scope {
 	case model.CISecretScopeStatic,
 		model.CISecretScopeTest,
+		model.CISecretScopeE2E,
 		model.CISecretScopeReview,
 		model.CISecretScopeRepair,
 		model.CISecretScopeArtifact,
@@ -495,6 +497,10 @@ func validCISecretScope(scope string) bool {
 // configuration loading and planning. A required workflow must be present and
 // enabled; whenever one is present, its configured controls are validated.
 func ValidateWorkflow(workflow *model.WorkflowConfig, required bool) error {
+	return validateWorkflow(workflow, required, model.TestGuardCategories)
+}
+
+func validateWorkflow(workflow *model.WorkflowConfig, required bool, testGuardCategories []string) error {
 	if workflow == nil {
 		if required {
 			return fmt.Errorf("workflow is required")
@@ -515,7 +521,7 @@ func ValidateWorkflow(workflow *model.WorkflowConfig, required bool) error {
 	if err := validateGuardSet("static", workflow.StaticGuards, model.StaticGuardCategories); err != nil {
 		return err
 	}
-	if err := validateGuardSet("test", workflow.TestGuards, model.TestGuardCategories); err != nil {
+	if err := validateGuardSet("test", workflow.TestGuards, testGuardCategories); err != nil {
 		return err
 	}
 
@@ -652,6 +658,15 @@ func ValidateWorkflow(workflow *model.WorkflowConfig, required bool) error {
 		}
 	}
 	return nil
+}
+
+func workflowHasTestE2E(workflow *model.WorkflowConfig) bool {
+	if workflow == nil {
+		return false
+	}
+	_, hasCommand := workflow.TestGuards.Commands[model.GuardE2E]
+	_, hasWaiver := workflow.TestGuards.Waivers[model.GuardE2E]
+	return hasCommand || hasWaiver
 }
 
 func workflowAdoptionPhase(workflow *model.WorkflowConfig) string {

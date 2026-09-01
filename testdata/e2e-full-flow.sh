@@ -36,7 +36,7 @@ test -f "$SAM_HARNESS_FIXTURE/.sam-harness/ci/gitlab.yml"
 
 "$SAM_HARNESS_BIN" doctor "$SAM_HARNESS_FIXTURE"
 
-for SAM_HARNESS_PHASE in static test review artifact staging production observe migration rollback; do
+for SAM_HARNESS_PHASE in static test e2e review artifact staging production observe migration rollback; do
   "$SAM_HARNESS_BIN" pipeline "$SAM_HARNESS_FIXTURE" --phase "$SAM_HARNESS_PHASE" --receipt true
 done
 

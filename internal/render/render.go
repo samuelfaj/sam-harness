@@ -267,7 +267,7 @@ func buildConfig(scan model.ScanResult, profile model.Profile, answers model.Ans
 		cfg.Gates = append(cfg.Gates, model.Gate{
 			Name:     "browser",
 			Stage:    "local",
-			Phase:    model.PhaseStatic,
+			Phase:    model.PhaseE2E,
 			Workdir:  ".",
 			Command:  append([]string(nil), answers.BrowserCommand...),
 			Required: true,
@@ -768,6 +768,7 @@ func workflowDocument(cfg model.Config) string {
 	builder.WriteString("## Local phases\n\n")
 	writeGateInventory(&builder, cfg.Gates, model.PhaseStatic)
 	writeGateInventory(&builder, cfg.Gates, model.PhaseTest)
+	writeGateInventory(&builder, cfg.Gates, model.PhaseE2E)
 	builder.WriteString("\n## Static guard command-or-waiver inventory\n\n")
 	writeGuardInventory(&builder, cfg.Workflow.StaticGuards, model.StaticGuardCategories)
 	builder.WriteString("\n## Test guard command-or-waiver inventory\n\n")
@@ -1240,12 +1241,17 @@ jobs:
 `)
 	writeGitHubPhaseJob(&builder, cfg, "static", model.PhaseStatic, "", "")
 	writeGitHubPhaseJob(&builder, cfg, "test", model.PhaseTest, "static", "")
+	validationDependency := "test"
+	if hasPhaseGate(cfg, model.PhaseE2E) {
+		writeGitHubPhaseJob(&builder, cfg, "e2e", model.PhaseE2E, "test", "")
+		validationDependency = "e2e"
+	}
 	if cfg.Workflow == nil || !cfg.Workflow.Enabled {
 		return builder.String()
 	}
-	artifactDependency := "test"
+	artifactDependency := validationDependency
 	if len(scopedSecretBindings(cfg, "github", model.CISecretScopeReview)) == 0 {
-		writeGitHubReviewJob(&builder, cfg)
+		writeGitHubReviewJob(&builder, cfg, validationDependency)
 		artifactDependency = "review"
 	}
 	writeGitHubPhaseJob(&builder, cfg, "artifact", model.PhaseArtifact, artifactDependency, "")
@@ -1456,11 +1462,11 @@ func writeGitHubTrustedReviewControlPlane(builder *strings.Builder, cfg model.Co
 	builder.WriteString("        run: |\n          set -eu\n")
 	writeGitHubSecretGuards(builder, cfg, model.CISecretScopeReview, "          ")
 	trustedReview := trustedReviewCommand(cfg, `"${{ needs.resolve.outputs.base_sha }}"`, `"${{ needs.resolve.outputs.head_sha }}"`)
-	builder.WriteString("          set +e\n          prior_review_receipt=\"\"\n          if [ -d \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" ]; then\n            prior_review_count=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print | wc -l | tr -d '[:space:]')\"\n            test \"$prior_review_count\" -eq 1\n            prior_review_receipt=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print)\"\n          fi\n          if [ -n \"$prior_review_receipt\" ]; then\n            output=\"$(" + trustedReview + " --prior-review-receipt \"$prior_review_receipt\" 2>&1)\"\n          else\n            output=\"$(" + trustedReview + " 2>&1)\"\n          fi\n")
-	builder.WriteString(`          status=$?
+	builder.WriteString("          phase_output=\"$(mktemp)\"\n          trap 'rm -f \"$phase_output\"' EXIT\n          set +e\n          prior_review_receipt=\"\"\n          if [ -d \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" ]; then\n            prior_review_count=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print | wc -l | tr -d '[:space:]')\"\n            test \"$prior_review_count\" -eq 1\n            prior_review_receipt=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print)\"\n          fi\n          if [ -n \"$prior_review_receipt\" ]; then\n            " + trustedReview + " --prior-review-receipt \"$prior_review_receipt\" 2>&1 | tee \"$phase_output\"\n            pipeline_status=(\"${PIPESTATUS[@]}\")\n          else\n            " + trustedReview + " 2>&1 | tee \"$phase_output\"\n            pipeline_status=(\"${PIPESTATUS[@]}\")\n          fi\n")
+	builder.WriteString(`          status="${pipeline_status[0]}"
           set -e
-          printf '%s\n' "$output"
-          receipt="$(printf '%s\n' "$output" | sed -n 's/^Receipt: //p' | tail -n 1)"
+          test "${pipeline_status[1]}" -eq 0
+          receipt="$(sed -n 's/^Receipt: //p' "$phase_output" | tail -n 1)"
           test -n "$receipt"
           test -f "$receipt"
           review_patch="$(jq -r '.review_patch // empty' "$receipt")"
@@ -1787,6 +1793,9 @@ func writeGitHubTrustedRepairPublisher(builder *strings.Builder, cfg model.Confi
 
 func writeGitHubPhaseJob(builder *strings.Builder, cfg model.Config, job string, phase model.Phase, needs, environment string) {
 	builder.WriteString(fmt.Sprintf("  %s:\n    runs-on: ubuntu-latest\n", job))
+	if timeout := observationTimeoutMinutes(cfg, phase); timeout > 0 {
+		builder.WriteString(fmt.Sprintf("    timeout-minutes: %d\n", timeout))
+	}
 	if needs != "" {
 		builder.WriteString(fmt.Sprintf("    needs: %s\n", needs))
 	}
@@ -1862,12 +1871,15 @@ func writeGitHubPhaseJob(builder *strings.Builder, cfg model.Config, job string,
 
 func writeGitHubCapturedPipelineCommand(builder *strings.Builder, command string) {
 	builder.WriteString(`        run: |
+          phase_output="$(mktemp)"
+          trap 'rm -f "$phase_output"' EXIT
           set +e
-          output="$(` + command + ` 2>&1)"
-          status=$?
+          ` + command + ` 2>&1 | tee "$phase_output"
+          pipeline_status=("${PIPESTATUS[@]}")
           set -e
-          printf '%s\n' "$output"
-          receipt="$(printf '%s\n' "$output" | sed -n 's/^Receipt: //p' | tail -n 1)"
+          test "${pipeline_status[1]}" -eq 0
+          status="${pipeline_status[0]}"
+          receipt="$(sed -n 's/^Receipt: //p' "$phase_output" | tail -n 1)"
           test -n "$receipt"
           test -f "$receipt"
           receipt_html="${receipt%.json}.html"
@@ -1877,11 +1889,10 @@ func writeGitHubCapturedPipelineCommand(builder *strings.Builder, command string
 `)
 }
 
-func writeGitHubReviewJob(builder *strings.Builder, cfg model.Config) {
+func writeGitHubReviewJob(builder *strings.Builder, cfg model.Config, needs string) {
 	builder.WriteString(`  review:
     runs-on: ubuntu-latest
-    needs: test
-`)
+    needs: ` + needs + "\n")
 	if phaseAuthorizedForCI(cfg, model.PhaseReview) {
 		builder.WriteString("    if: github.event_name != 'workflow_dispatch' && (github.event_name == 'pull_request' || github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref_name == github.event.repository.default_branch))\n")
 	} else {
@@ -1902,11 +1913,11 @@ func writeGitHubReviewJob(builder *strings.Builder, cfg model.Config) {
 	builder.WriteString("        run: |\n          set -eu\n")
 	writeGitHubSecretGuards(builder, cfg, model.CISecretScopeReview, "          ")
 	trustedReview := trustedPipelineCommand(cfg, model.PhaseReview)
-	builder.WriteString("          set +e\n          prior_review_receipt=\"\"\n          if [ -d \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" ]; then\n            prior_review_count=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print | wc -l | tr -d '[:space:]')\"\n            test \"$prior_review_count\" -eq 1\n            prior_review_receipt=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print)\"\n          fi\n          if [ -n \"$prior_review_receipt\" ]; then\n            output=\"$(" + trustedReview + " --prior-review-receipt \"$prior_review_receipt\" 2>&1)\"\n          else\n            output=\"$(" + trustedReview + " 2>&1)\"\n          fi\n")
-	builder.WriteString(`          status=$?
+	builder.WriteString("          phase_output=\"$(mktemp)\"\n          trap 'rm -f \"$phase_output\"' EXIT\n          set +e\n          prior_review_receipt=\"\"\n          if [ -d \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" ]; then\n            prior_review_count=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print | wc -l | tr -d '[:space:]')\"\n            test \"$prior_review_count\" -eq 1\n            prior_review_receipt=\"$(find \"${GITHUB_WORKSPACE}/target/.sam-harness/evidence/prior-review\" -type f -name '*-pipeline-review.json' -print)\"\n          fi\n          if [ -n \"$prior_review_receipt\" ]; then\n            " + trustedReview + " --prior-review-receipt \"$prior_review_receipt\" 2>&1 | tee \"$phase_output\"\n            pipeline_status=(\"${PIPESTATUS[@]}\")\n          else\n            " + trustedReview + " 2>&1 | tee \"$phase_output\"\n            pipeline_status=(\"${PIPESTATUS[@]}\")\n          fi\n")
+	builder.WriteString(`          status="${pipeline_status[0]}"
           set -e
-          printf '%s\n' "$output"
-          receipt="$(printf '%s\n' "$output" | sed -n 's/^Receipt: //p' | tail -n 1)"
+          test "${pipeline_status[1]}" -eq 0
+          receipt="$(sed -n 's/^Receipt: //p' "$phase_output" | tail -n 1)"
           test -n "$receipt"
           test -f "$receipt"
           review_patch="$(sed -n 's/^[[:space:]]*"review_patch":[[:space:]]*"\([^"]*\)"[,]\{0,1\}[[:space:]]*$/\1/p' "$receipt")"
@@ -2204,6 +2215,9 @@ func gitlabJob(cfg model.Config) string {
 	}
 	var builder strings.Builder
 	builder.WriteString("# Generated by sam-harness. Edit .sam-harness/config.yaml, not this file.\nstages:\n  - static\n  - test\n")
+	if hasPhaseGate(cfg, model.PhaseE2E) {
+		builder.WriteString("  - e2e\n")
+	}
 	if cfg.Workflow != nil && cfg.Workflow.Enabled {
 		builder.WriteString("  - review\n  - artifact\n")
 		if repairEnabled(cfg) {
@@ -2229,10 +2243,14 @@ func gitlabJob(cfg model.Config) string {
 `)
 	writeGitLabPhaseJob(&builder, cfg, "sam-harness-static", model.PhaseStatic, "static", []string{}, false)
 	writeGitLabPhaseJob(&builder, cfg, "sam-harness-test", model.PhaseTest, "test", []string{}, false)
+	artifactDependencies := []string{"sam-harness-static", "sam-harness-test"}
+	if hasPhaseGate(cfg, model.PhaseE2E) {
+		writeGitLabPhaseJob(&builder, cfg, "sam-harness-e2e", model.PhaseE2E, "e2e", []string{"sam-harness-test"}, false)
+		artifactDependencies = append(artifactDependencies, "sam-harness-e2e")
+	}
 	if cfg.Workflow == nil || !cfg.Workflow.Enabled {
 		return builder.String()
 	}
-	artifactDependencies := []string{"sam-harness-static", "sam-harness-test"}
 	gitLabExternalControl := providerUsesExternalAgentControl(cfg, "gitlab")
 	gitLabReviewBound := gitLabExternalControl || len(scopedSecretBindings(cfg, "gitlab", model.CISecretScopeReview)) > 0
 	gitLabRepairBound := gitLabExternalControl || len(scopedSecretBindings(cfg, "gitlab", model.CISecretScopeRepair)) > 0
@@ -2261,6 +2279,9 @@ func gitlabJob(cfg model.Config) string {
 
 func writeGitLabPhaseJob(builder *strings.Builder, cfg model.Config, job string, phase model.Phase, stage string, needs []string, defaultBranchOnly bool) {
 	builder.WriteString("\n" + job + ":\n  extends: .sam-harness-base\n  stage: " + stage + "\n")
+	if timeout := observationTimeoutMinutes(cfg, phase); timeout > 0 {
+		builder.WriteString(fmt.Sprintf("  timeout: %d minutes\n", timeout))
+	}
 	if needs != nil {
 		if len(needs) == 0 {
 			builder.WriteString("  needs: []\n")
@@ -2676,8 +2697,37 @@ func deploymentPhase(phase model.Phase) bool {
 	return phase == model.PhaseStaging || phase == model.PhaseMigration || phase == model.PhaseProduction || phase == model.PhaseObserve || phase == model.PhaseRollback
 }
 
+func observationTimeoutMinutes(cfg model.Config, phase model.Phase) int {
+	if phase != model.PhaseObserve || cfg.Workflow == nil {
+		return 0
+	}
+	maxSeconds := 0
+	for _, check := range cfg.Workflow.Deployment.ObservationChecks {
+		if check.TimeoutSeconds > maxSeconds {
+			maxSeconds = check.TimeoutSeconds
+		}
+	}
+	if maxSeconds <= 0 {
+		return 0
+	}
+	return (maxSeconds + 59) / 60
+}
+
 func untrustedPhase(phase model.Phase) bool {
-	return phase == model.PhaseStatic || phase == model.PhaseTest || phase == model.PhaseArtifact
+	return phase == model.PhaseStatic || phase == model.PhaseTest || phase == model.PhaseE2E || phase == model.PhaseArtifact
+}
+
+func hasPhaseGate(cfg model.Config, phase model.Phase) bool {
+	for _, gate := range cfg.Gates {
+		gatePhase := gate.Phase
+		if gatePhase == "" {
+			gatePhase = model.PhaseStatic
+		}
+		if gatePhase == phase {
+			return true
+		}
+	}
+	return false
 }
 
 func phaseAuthorizedForCI(cfg model.Config, phase model.Phase) bool {

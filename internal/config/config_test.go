@@ -124,6 +124,23 @@ func TestParseRejectsProductionWithoutOperationalOwnership(t *testing.T) {
 	}
 }
 
+func TestParseAllowsCommandOnlyMigration(t *testing.T) {
+	t.Parallel()
+	cfg := validProductionConfig()
+	cfg.Migration = model.MigrationConfig{
+		Required:           true,
+		ReconciliationGate: false,
+		RestoreTest:        false,
+	}
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(data); err != nil {
+		t.Fatalf("Parse() rejected command-only migration: %v", err)
+	}
+}
+
 func TestParseRejectsPathsOutsideTheRepository(t *testing.T) {
 	t.Parallel()
 	cfg := validConfig()
@@ -830,6 +847,19 @@ func TestParseAllowsTargetHelpersWithoutProviderBoundSecrets(t *testing.T) {
 	cfg.Workflow.Correction.Command = []string{"node", "./repair.js"}
 	if _, err := Parse(mustMarshalYAML(t, cfg)); err != nil {
 		t.Fatalf("Parse() rejected an explicit no-secret workflow: %v", err)
+	}
+}
+
+func TestCurrentConfigRejectsE2EInsideTestGuardsButLegacyConfigStillLoads(t *testing.T) {
+	t.Parallel()
+	cfg := validProductionConfig()
+	cfg.Workflow.TestGuards.Waivers[model.GuardE2E] = "legacy e2e coverage"
+	if _, err := Parse(mustMarshalYAML(t, cfg)); err == nil || !strings.Contains(err.Error(), `test guard waiver has unknown category "e2e"`) {
+		t.Fatalf("current config kept e2e inside test guards: %v", err)
+	}
+	cfg.HarnessVersion = "0.8.8"
+	if _, err := Parse(mustMarshalYAML(t, cfg)); err != nil {
+		t.Fatalf("legacy e2e test guard no longer loads for upgrade: %v", err)
 	}
 }
 

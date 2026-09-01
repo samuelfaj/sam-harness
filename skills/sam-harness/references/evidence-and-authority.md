@@ -13,7 +13,7 @@ Keep these states separate:
 7. An immutable artifact was built from that CI state.
 8. The target environment reports that artifact digest.
 9. Live technical and business signals stayed healthy for the observation window.
-10. Migration or rollback completed with its own reconciliation or recovery evidence, when applicable.
+10. The configured migration or rollback completed with its own reconciliation or recovery evidence, when those controls are declared applicable.
 
 Never use one receipt to claim a later state.
 

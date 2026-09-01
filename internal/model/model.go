@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-var HarnessVersion = "0.8.4"
+var HarnessVersion = "0.9.0"
 
 const SchemaVersion = "1"
 
@@ -74,6 +74,7 @@ type Phase string
 const (
 	PhaseStatic     Phase = "static"
 	PhaseTest       Phase = "test"
+	PhaseE2E        Phase = "e2e"
 	PhaseReview     Phase = "review"
 	PhaseArtifact   Phase = "artifact"
 	PhaseStaging    Phase = "staging"
@@ -86,7 +87,7 @@ const (
 
 func (p Phase) Valid() bool {
 	switch p {
-	case PhaseStatic, PhaseTest, PhaseReview, PhaseArtifact, PhaseStaging, PhaseProduction, PhaseObserve, PhaseRollback, PhaseMigration, PhaseAll:
+	case PhaseStatic, PhaseTest, PhaseE2E, PhaseReview, PhaseArtifact, PhaseStaging, PhaseProduction, PhaseObserve, PhaseRollback, PhaseMigration, PhaseAll:
 		return true
 	default:
 		return false
@@ -96,6 +97,7 @@ func (p Phase) Valid() bool {
 const (
 	CISecretScopeStatic     = "static"
 	CISecretScopeTest       = "test"
+	CISecretScopeE2E        = "e2e"
 	CISecretScopeReview     = "review"
 	CISecretScopeRepair     = "repair"
 	CISecretScopeArtifact   = "artifact"
@@ -114,6 +116,7 @@ const (
 var CISecretScopes = []string{
 	CISecretScopeStatic,
 	CISecretScopeTest,
+	CISecretScopeE2E,
 	CISecretScopeReview,
 	CISecretScopeRepair,
 	CISecretScopeArtifact,
@@ -161,7 +164,6 @@ var TestGuardCategories = []string{
 	GuardBusinessInvariants,
 	GuardProperty,
 	GuardMutation,
-	GuardE2E,
 	GuardPerformance,
 }
 
@@ -464,6 +466,8 @@ type ReleaseConfig struct {
 }
 
 type MigrationConfig struct {
+	// ReconciliationGate and RestoreTest describe optional controls supplied by
+	// the repository's migration command; Sam Harness never runs them implicitly.
 	Required           bool `json:"required" yaml:"required"`
 	ReconciliationGate bool `json:"reconciliation_gate" yaml:"reconciliation_gate"`
 	RestoreTest        bool `json:"restore_test" yaml:"restore_test"`

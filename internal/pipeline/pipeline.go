@@ -22,6 +22,7 @@ import (
 )
 
 const outputLimit = 32 * 1024
+const commandHeartbeatInterval = 30 * time.Second
 
 var (
 	progressMu  sync.Mutex
@@ -165,6 +166,7 @@ type commandExecution struct {
 
 type RunOptions struct {
 	ConfigPath         string
+	Gate               string
 	ReviewBase         string
 	ReviewBaseSHA      string
 	ReviewHeadSHA      string
@@ -174,6 +176,7 @@ type RunOptions struct {
 
 type phaseContext struct {
 	config             configEvidence
+	gate               string
 	reviewBase         string
 	reviewBaseSHA      string
 	reviewHeadSHA      string
@@ -202,6 +205,9 @@ func RunWithOptions(path string, phase model.Phase, writeReceipt bool, options R
 	if !phase.Valid() {
 		return Receipt{}, "", fmt.Errorf("pipeline phase %q is invalid", phase)
 	}
+	if strings.TrimSpace(options.Gate) != "" && phase != model.PhaseE2E {
+		return Receipt{}, "", errors.New("--gate is only valid for e2e")
+	}
 	if strings.TrimSpace(options.ReviewBase) != "" && phase != model.PhaseReview && phase != model.PhaseAll {
 		return Receipt{}, "", errors.New("--review-base is only valid for review or all")
 	}
@@ -225,6 +231,7 @@ func RunWithOptions(path string, phase model.Phase, writeReceipt bool, options R
 	}
 	context := phaseContext{
 		config:             configEvidence,
+		gate:               strings.TrimSpace(options.Gate),
 		reviewBase:         options.ReviewBase,
 		reviewBaseSHA:      normalizedBaseSHA,
 		reviewHeadSHA:      normalizedHeadSHA,
@@ -325,7 +332,7 @@ func runPhaseWithContext(root string, cfg model.Config, phase model.Phase, finge
 	receipt := newReceipt(root, phase, fingerprint)
 	receipt.Repository = cfg.Repository
 	err := authorizePhase(cfg, phase)
-	if err == nil && phase != model.PhaseStatic && phase != model.PhaseTest {
+	if err == nil && phase != model.PhaseStatic && phase != model.PhaseTest && phase != model.PhaseE2E {
 		err = runReadOnlyConfiguredGates(root, cfg, phase, &receipt)
 	}
 	if err != nil {
@@ -335,8 +342,8 @@ func runPhaseWithContext(root string, cfg model.Config, phase model.Phase, finge
 		return receipt, err
 	}
 	switch phase {
-	case model.PhaseStatic, model.PhaseTest:
-		err = runReadOnlyGatePhase(root, cfg, phase, &receipt)
+	case model.PhaseStatic, model.PhaseTest, model.PhaseE2E:
+		err = runReadOnlyGatePhase(root, cfg, phase, context.gate, &receipt)
 	case model.PhaseReview:
 		err = runReview(root, cfg, context, &receipt)
 	case model.PhaseArtifact:
@@ -402,12 +409,12 @@ func authorizePhase(cfg model.Config, phase model.Phase) error {
 	return nil
 }
 
-func runReadOnlyGatePhase(root string, cfg model.Config, phase model.Phase, receipt *Receipt) error {
+func runReadOnlyGatePhase(root string, cfg model.Config, phase model.Phase, gate string, receipt *Receipt) error {
 	before, err := repositoryFingerprint(root, cfg)
 	if err != nil {
 		return fmt.Errorf("%s phase fingerprint before commands: %w", phase, err)
 	}
-	runErr := runGatePhase(root, cfg, phase, receipt)
+	runErr := runGatePhase(root, cfg, phase, gate, receipt)
 	after, err := repositoryFingerprint(root, cfg)
 	if err != nil {
 		return fmt.Errorf("%s phase fingerprint after commands: %w", phase, err)
@@ -489,6 +496,9 @@ func finishRun(root string, cfg model.Config, evidence configEvidence, receipt R
 
 func allPhases(cfg model.Config) []model.Phase {
 	phases := []model.Phase{model.PhaseStatic, model.PhaseTest}
+	if hasConfiguredGate(cfg, model.PhaseE2E) {
+		phases = append(phases, model.PhaseE2E)
+	}
 	if cfg.Workflow == nil || !cfg.Workflow.Enabled {
 		return phases
 	}
@@ -520,17 +530,29 @@ func requireWorkflow(cfg model.Config, phase model.Phase) (*model.WorkflowConfig
 	return cfg.Workflow, nil
 }
 
-func runGatePhase(root string, cfg model.Config, phase model.Phase, receipt *Receipt) error {
-	failed := runConfiguredGates(root, cfg, phase, receipt) != nil
-	if cfg.Workflow != nil && cfg.Workflow.Enabled {
-		guards := cfg.Workflow.StaticGuards
-		categories := model.StaticGuardCategories
-		if phase == model.PhaseTest {
-			guards = cfg.Workflow.TestGuards
-			categories = model.TestGuardCategories
+func runGatePhase(root string, cfg model.Config, phase model.Phase, gate string, receipt *Receipt) error {
+	if phase == model.PhaseE2E && !hasConfiguredGateNamed(cfg, phase, gate) {
+		if gate != "" {
+			return fmt.Errorf("e2e gate %q is not configured", gate)
 		}
-		if err := runGuards(root, phase, guards, categories, receipt); err != nil {
-			failed = true
+		return errors.New("e2e phase requires at least one configured gate")
+	}
+	failed := runConfiguredGatesFor(root, cfg, phase, gate, receipt) != nil
+	if cfg.Workflow != nil && cfg.Workflow.Enabled {
+		var guards model.GuardSet
+		var categories []string
+		switch phase {
+		case model.PhaseStatic:
+			guards = cfg.Workflow.StaticGuards
+			categories = model.StaticGuardCategories
+		case model.PhaseTest:
+			guards = cfg.Workflow.TestGuards
+			categories = testGuardCategories(cfg)
+		}
+		if len(categories) > 0 {
+			if err := runGuards(root, phase, guards, categories, receipt); err != nil {
+				failed = true
+			}
 		}
 	}
 	if failed {
@@ -540,6 +562,10 @@ func runGatePhase(root string, cfg model.Config, phase model.Phase, receipt *Rec
 }
 
 func runConfiguredGates(root string, cfg model.Config, phase model.Phase, receipt *Receipt) error {
+	return runConfiguredGatesFor(root, cfg, phase, "", receipt)
+}
+
+func runConfiguredGatesFor(root string, cfg model.Config, phase model.Phase, selected string, receipt *Receipt) error {
 	failed := false
 	for _, gate := range cfg.Gates {
 		gatePhase := gate.Phase
@@ -547,6 +573,9 @@ func runConfiguredGates(root string, cfg model.Config, phase model.Phase, receip
 			gatePhase = model.PhaseStatic
 		}
 		if gatePhase != phase {
+			continue
+		}
+		if selected != "" && gate.Name != selected {
 			continue
 		}
 		spec := model.CommandSpec{
@@ -566,6 +595,36 @@ func runConfiguredGates(root string, cfg model.Config, phase model.Phase, receip
 		return fmt.Errorf("one or more required %s gates failed", phase)
 	}
 	return nil
+}
+
+func hasConfiguredGate(cfg model.Config, phase model.Phase) bool {
+	return hasConfiguredGateNamed(cfg, phase, "")
+}
+
+func hasConfiguredGateNamed(cfg model.Config, phase model.Phase, name string) bool {
+	for _, gate := range cfg.Gates {
+		gatePhase := gate.Phase
+		if gatePhase == "" {
+			gatePhase = model.PhaseStatic
+		}
+		if gatePhase == phase && (name == "" || gate.Name == name) {
+			return true
+		}
+	}
+	return false
+}
+
+func testGuardCategories(cfg model.Config) []string {
+	categories := model.TestGuardCategories
+	if cfg.HarnessVersion == model.HarnessVersion || cfg.Workflow == nil {
+		return categories
+	}
+	_, hasCommand := cfg.Workflow.TestGuards.Commands[model.GuardE2E]
+	_, hasWaiver := cfg.Workflow.TestGuards.Waivers[model.GuardE2E]
+	if hasCommand || hasWaiver {
+		return append(append([]string(nil), categories...), model.GuardE2E)
+	}
+	return categories
 }
 
 func runGuards(root string, phase model.Phase, guards model.GuardSet, categories []string, receipt *Receipt) error {
@@ -1246,7 +1305,27 @@ func executeCommand(root string, phase model.Phase, spec model.CommandSpec, stdi
 	}
 	started := time.Now()
 	writeCommandProgress(progress, phase, spec.Name, "start", 0, secrets)
+	heartbeatDone := make(chan struct{})
+	var heartbeatWG sync.WaitGroup
+	if progress != nil {
+		heartbeatWG.Add(1)
+		go func() {
+			defer heartbeatWG.Done()
+			ticker := time.NewTicker(commandHeartbeatInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-heartbeatDone:
+					return
+				case <-ticker.C:
+					writeCommandProgress(progress, phase, spec.Name, "running", time.Since(started), secrets)
+				}
+			}
+		}()
+	}
 	defer func() {
+		close(heartbeatDone)
+		heartbeatWG.Wait()
 		result.Output = redactSensitiveValues(result.Output, secrets)
 		result.Duration = time.Since(started)
 		result.FinishedAt = time.Now().UTC()
@@ -1300,9 +1379,13 @@ func executeCommand(root string, phase model.Phase, spec model.CommandSpec, stdi
 	cmd.Stdin = bytes.NewReader(stdin)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdoutStream := newLiveCommandOutputWriter(&stdout, progress, secrets)
+	stderrStream := newLiveCommandOutputWriter(&stderr, progress, secrets)
+	cmd.Stdout = stdoutStream
+	cmd.Stderr = stderrStream
 	err = cmd.Run()
+	stdoutStream.Flush()
+	stderrStream.Flush()
 	stdoutText := stdout.String()
 	stderrText := stderr.String()
 	result.Output = truncate(strings.TrimSpace(stdoutText + "\n" + stderrText))
@@ -1321,6 +1404,77 @@ func executeCommand(root string, phase model.Phase, spec model.CommandSpec, stdi
 		result.Output = strings.TrimSpace(result.Output + "\n" + err.Error())
 	}
 	return commandExecution{result: result, stdout: stdoutText, stderr: stderrText}
+}
+
+type liveCommandOutputWriter struct {
+	capture  io.Writer
+	progress io.Writer
+	secrets  []string
+	pending  []byte
+}
+
+func newLiveCommandOutputWriter(capture, progress io.Writer, secrets []string) *liveCommandOutputWriter {
+	return &liveCommandOutputWriter{
+		capture:  capture,
+		progress: progress,
+		secrets:  secrets,
+	}
+}
+
+func (writer *liveCommandOutputWriter) Write(value []byte) (int, error) {
+	written, err := writer.capture.Write(value)
+	if err != nil {
+		return written, err
+	}
+	writer.pending = append(writer.pending, value...)
+	writer.flush(false)
+	return written, nil
+}
+
+func (writer *liveCommandOutputWriter) Flush() {
+	writer.flush(true)
+}
+
+func (writer *liveCommandOutputWriter) flush(force bool) {
+	if len(writer.pending) == 0 {
+		return
+	}
+	keep := 0
+	if !force {
+		keep = longestSecretPrefixSuffix(writer.pending, writer.secrets)
+	}
+	flushLength := len(writer.pending) - keep
+	if flushLength == 0 {
+		return
+	}
+	writeCommandOutput(writer.progress, []byte(redactSensitiveValues(string(writer.pending[:flushLength]), writer.secrets)))
+	writer.pending = append([]byte(nil), writer.pending[flushLength:]...)
+}
+
+func longestSecretPrefixSuffix(value []byte, secrets []string) int {
+	longest := 0
+	for _, secret := range secrets {
+		maxLength := len(secret) - 1
+		if maxLength > len(value) {
+			maxLength = len(value)
+		}
+		for length := maxLength; length > longest; length-- {
+			if strings.HasSuffix(string(value), secret[:length]) {
+				longest = length
+				break
+			}
+		}
+	}
+	return longest
+}
+
+func writeCommandOutput(writer io.Writer, value []byte) {
+	if writer == nil || len(value) == 0 {
+		return
+	}
+	progressMu.Lock()
+	defer progressMu.Unlock()
+	_, _ = writer.Write(value)
 }
 
 func commandProgressWriter() io.Writer {

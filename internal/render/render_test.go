@@ -204,6 +204,37 @@ func TestBuildGeneratesParseableCIWithApprovedSetup(t *testing.T) {
 	}
 }
 
+func TestBuildSeparatesConfirmedBrowserChecksIntoE2EPhase(t *testing.T) {
+	t.Parallel()
+	approved := productionAnswers()
+	approved.BrowserCommand = []string{"npx", "playwright", "test"}
+	operations := buildProductionOperationsWithAnswers(t, t.TempDir(), approved)
+
+	config := operationContent(t, operations, ".sam-harness/config.yaml")
+	if !strings.Contains(config, "name: browser") || !strings.Contains(config, "phase: e2e") {
+		t.Fatalf("browser command was not classified as e2e:\n%s", config)
+	}
+
+	github := operationContent(t, operations, ".github/workflows/sam-harness.yml")
+	e2e := contentSection(t, github, "  e2e:\n", "  artifact:\n")
+	if !strings.Contains(e2e, "needs: test") || !strings.Contains(e2e, "--phase e2e") {
+		t.Fatalf("GitHub e2e job is not a distinct post-test phase:\n%s", e2e)
+	}
+	artifactGitHub := contentSection(t, github, "  artifact:\n", "  staging:\n")
+	if !strings.Contains(artifactGitHub, "needs: e2e") {
+		t.Fatalf("GitHub artifact does not wait for e2e:\n%s", artifactGitHub)
+	}
+
+	gitlab := operationContent(t, operations, ".sam-harness/ci/gitlab.yml")
+	if !strings.Contains(gitlab, "  - e2e\n") || !strings.Contains(gitlab, "sam-harness-e2e:\n") || !strings.Contains(gitlab, "--phase e2e") {
+		t.Fatalf("GitLab e2e job is missing:\n%s", gitlab)
+	}
+	artifact := contentSection(t, gitlab, "sam-harness-artifact:\n", "sam-harness-staging:\n")
+	if !strings.Contains(artifact, "job: sam-harness-e2e") {
+		t.Fatalf("GitLab artifact does not wait for e2e:\n%s", artifact)
+	}
+}
+
 func TestBuildSelfRepositoryUsesLocalHarnessCommand(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "sam-harness")
@@ -212,6 +243,9 @@ func TestBuildSelfRepositoryUsesLocalHarnessCommand(t *testing.T) {
 		content := operationContent(t, operations, path)
 		if !strings.Contains(content, "go run ./cmd/sam-harness pipeline .") {
 			t.Fatalf("self-hosted credential-free phases in %s do not use the checked-out harness command:\n%s", path, content)
+		}
+		if path == ".github/workflows/sam-harness.yml" && (!strings.Contains(content, `phase_output="$(mktemp)"`) || !strings.Contains(content, `| tee "$phase_output"`)) {
+			t.Fatalf("self-hosted GitHub phases in %s do not stream command output while retaining receipt discovery:\n%s", path, content)
 		}
 	}
 	dispatcher := operationContent(t, operations, ".github/workflows/sam-harness-merge-queue-dispatch.yml")
@@ -1083,10 +1117,15 @@ func TestBuildGitLabRendersLifecycleAndManualTrustedRepairPublisher(t *testing.T
 		"when: manual",
 		"allow_failure: false",
 		"sed -n 's/^Receipt: //p'",
+		"timeout: 2 minutes",
 	} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("GitLab workflow missing %q:\n%s", expected, content)
 		}
+	}
+	github := operationContent(t, buildProductionOperations(t, t.TempDir()), ".github/workflows/sam-harness.yml")
+	if !strings.Contains(contentSection(t, github, "  observe:\n", "  rollback:\n"), "timeout-minutes: 2") {
+		t.Fatalf("GitHub observation job must derive a bounded timeout from its check:\n%s", github)
 	}
 	if strings.Count(content, "job: sam-harness-artifact") < 3 {
 		t.Fatalf("GitLab promotion jobs do not receive the immutable artifact and artifact receipt directly:\n%s", content)

@@ -143,7 +143,7 @@
       "properties": {
         "name": { "type": "string", "minLength": 1 },
         "stage": { "enum": ["local", "ci", "release", "production"] },
-        "phase": { "enum": ["static", "test", "review", "artifact", "staging", "production", "observe", "rollback", "migration", "all"] },
+        "phase": { "enum": ["static", "test", "e2e", "review", "artifact", "staging", "production", "observe", "rollback", "migration", "all"] },
         "workdir": { "type": "string", "minLength": 1 },
         "command": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
         "required": { "type": "boolean" }
@@ -178,7 +178,7 @@
       "additionalProperties": false,
       "required": ["scope", "environment", "secret"],
       "properties": {
-        "scope": { "enum": ["static", "test", "review", "repair", "artifact", "staging", "production", "observe", "rollback", "migration"] },
+        "scope": { "enum": ["static", "test", "e2e", "review", "repair", "artifact", "staging", "production", "observe", "rollback", "migration"] },
         "environment": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
         "secret": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
       }

@@ -1,5 +1,5 @@
 schema_version: "1"
-harness_version: 0.8.4
+harness_version: 0.9.0
 profile: production
 repository: sam-harness
 stacks:
@@ -48,6 +48,14 @@ gates:
         - go
         - vet
         - ./...
+      required: true
+    - name: complete customer installation lifecycle
+      stage: local
+      phase: e2e
+      workdir: .
+      command:
+        - sh
+        - testdata/e2e-full-flow.sh
       required: true
 authority:
     write_repository: true
@@ -217,14 +225,6 @@ workflow:
                     - ./internal/config
                 required: true
                 timeout_seconds: 900
-            e2e:
-                name: complete customer installation lifecycle
-                workdir: .
-                command:
-                    - sh
-                    - testdata/e2e-full-flow.sh
-                required: true
-                timeout_seconds: 1200
             integration:
                 name: apply, configuration and renderer integration
                 workdir: .
