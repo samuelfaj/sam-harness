@@ -55,6 +55,9 @@ func sourceSnapshot(root string, excludedPaths []string) (map[string]fileState, 
 		if relative == ".git" || relative == ".sam-harness/evidence" {
 			return true
 		}
+		if ignoredGeneratedSourceEntry(relative, entry) {
+			return true
+		}
 		if entry.IsDir() && ignoredSourceDirectory(entry.Name()) {
 			return true
 		}
@@ -75,10 +78,19 @@ func ignoredSourceDirectory(name string) bool {
 	}
 }
 
+func ignoredGeneratedSourceEntry(relative string, entry os.DirEntry) bool {
+	switch entry.Name() {
+	case ".bun", ".ci-cache", ".turbo", ".eslintcache":
+		return true
+	}
+	clean := filepath.ToSlash(relative)
+	return clean == ".husky/_" || strings.HasSuffix(clean, "/.husky/_")
+}
+
 func snapshotRepairWorktree(root, evidenceDirectory string) (map[string]fileState, error) {
 	evidence := filepath.ToSlash(filepath.Clean(filepath.FromSlash(evidenceDirectory)))
 	return snapshotRepository(root, func(relative string, entry os.DirEntry) bool {
-		return relative == ".git" || relative == evidence || relative == ".sam-harness/evidence" || (entry.IsDir() && ignoredSourceDirectory(entry.Name()))
+		return relative == ".git" || relative == evidence || relative == ".sam-harness/evidence" || ignoredGeneratedSourceEntry(relative, entry) || (entry.IsDir() && ignoredSourceDirectory(entry.Name()))
 	})
 }
 
