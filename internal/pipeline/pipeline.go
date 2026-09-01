@@ -22,6 +22,7 @@ import (
 )
 
 const outputLimit = 32 * 1024
+const commandHeartbeatInterval = 30 * time.Second
 
 var (
 	progressMu  sync.Mutex
@@ -1246,7 +1247,27 @@ func executeCommand(root string, phase model.Phase, spec model.CommandSpec, stdi
 	}
 	started := time.Now()
 	writeCommandProgress(progress, phase, spec.Name, "start", 0, secrets)
+	heartbeatDone := make(chan struct{})
+	var heartbeatWG sync.WaitGroup
+	if progress != nil {
+		heartbeatWG.Add(1)
+		go func() {
+			defer heartbeatWG.Done()
+			ticker := time.NewTicker(commandHeartbeatInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-heartbeatDone:
+					return
+				case <-ticker.C:
+					writeCommandProgress(progress, phase, spec.Name, "running", time.Since(started), secrets)
+				}
+			}
+		}()
+	}
 	defer func() {
+		close(heartbeatDone)
+		heartbeatWG.Wait()
 		result.Output = redactSensitiveValues(result.Output, secrets)
 		result.Duration = time.Since(started)
 		result.FinishedAt = time.Now().UTC()

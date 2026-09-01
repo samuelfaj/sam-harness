@@ -151,7 +151,7 @@ Se a publicação de change request estiver habilitada e autorizada separadament
 Para atualizar uma instalação legada de produção, informe as decisões obrigatórias do workflow da versão atual em um arquivo de respostas:
 
 ```bash
-sam-harness upgrade /caminho/do/repositorio --to 0.8.5 --answers /tmp/sam-harness-respostas-v0.8.json
+sam-harness upgrade /caminho/do/repositorio --to 0.8.6 --answers /tmp/sam-harness-respostas-v0.8.json
 ```
 
 `upgrade` combina as respostas explícitas com a configuração instalada e produz um plano com expiração; ele não aplica o plano. Revise decisões pendentes e todas as operações, depois aprove e aplique o novo ID exato. Use o [formato da configuração do workflow](../skills/sam-harness/references/workflow-configuration.md) para a cobertura de guards `static`/`test`, as decisões sobre nomes de secrets, ambiente protegido dos agentes e control plane do provedor, as atestações de filesystem e de comando confiável, e os comandos de ciclo que uma configuração legada de produção v0.1 não contém.
