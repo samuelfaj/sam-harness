@@ -222,6 +222,7 @@ func buildConfig(scan model.ScanResult, profile model.Profile, answers model.Ans
 			AgentRuntime:                 agentRuntimeForConfig(answers),
 			GitLabImage:                  answers.GitLabImage,
 			GitLabExternalPipelinePolicy: answers.GitLabExternalPipelinePolicy != nil && *answers.GitLabExternalPipelinePolicy,
+			ExternalCoverage:             cloneExternalCICoverage(scan.ExternalCICoverage),
 		},
 		Release: model.ReleaseConfig{
 			ImmutableArtifact:     production,
@@ -337,6 +338,15 @@ func cloneCommandSpecs(commands []model.CommandSpec) []model.CommandSpec {
 func cloneCommandSpec(command model.CommandSpec) model.CommandSpec {
 	command.Command = append([]string(nil), command.Command...)
 	return command
+}
+
+func cloneExternalCICoverage(coverage []model.ExternalCICoverage) []model.ExternalCICoverage {
+	cloned := make([]model.ExternalCICoverage, len(coverage))
+	for index, entry := range coverage {
+		entry.Command = append([]string(nil), entry.Command...)
+		cloned[index] = entry
+	}
+	return cloned
 }
 
 func cloneWaivers(waivers map[string]string) map[string]string {
@@ -1017,10 +1027,18 @@ func gatesDocument(cfg model.Config) string {
 	b.WriteString("A gate advances only when its stated evidence exists. Fluent output is not evidence.\n\n")
 	b.WriteString("## Configured commands\n\n")
 	if len(cfg.Gates) == 0 {
-		b.WriteString("No deterministic commands were discovered. Add verified commands to `.sam-harness/config.yaml` before claiming local validation.\n\n")
+		b.WriteString("No local deterministic commands were discovered. Add verified commands to `.sam-harness/config.yaml` before claiming local validation.\n\n")
 	} else {
 		for _, gate := range cfg.Gates {
 			b.WriteString(fmt.Sprintf("- [ ] `%s` in `%s`: `%s`\n", gate.Name, gate.Workdir, strings.Join(gate.Command, " ")))
+		}
+		b.WriteString("\n")
+	}
+	if len(cfg.CI.ExternalCoverage) > 0 {
+		b.WriteString("## Externally covered commands\n\n")
+		b.WriteString("These exact commands are owned by existing client CI and are not scheduled again as local Harness gates.\n\n")
+		for _, coverage := range cfg.CI.ExternalCoverage {
+			b.WriteString(fmt.Sprintf("- [x] `%s:%s:%s` in `%s`: `%s` — %s `%s`, job `%s`\n", coverage.StackKind, coverage.StackPath, coverage.Gate, coverage.Workdir, strings.Join(coverage.Command, " "), coverage.Provider, coverage.File, coverage.Job))
 		}
 		b.WriteString("\n")
 	}

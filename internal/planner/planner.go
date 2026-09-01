@@ -213,6 +213,7 @@ func Create(scan model.ScanResult, requested model.Profile, answers model.Answer
 		Unresolved:                   unresolved,
 		Deferred:                     deferred,
 		ProposedGuardDefaults:        undecidedProposedGuards(answers.Workflow, proposedDefaults),
+		ExternalCICoverage:           append([]model.ExternalCICoverage(nil), resolvedScan.ExternalCICoverage...),
 		ProposedReviewerHost:         host,
 		ProposedReviewerCommand:      proposedReviewer,
 		ProposedBrowserCommand:       browserCommand,
@@ -634,6 +635,7 @@ func hasNonGoStack(stacks []model.Stack) bool {
 func resolveCommands(scan model.ScanResult, answers model.Answers) (model.ScanResult, []string, error) {
 	resolved := scan
 	resolved.Stacks = make([]model.Stack, len(scan.Stacks))
+	resolved.ExternalCICoverage = nil
 	known := map[string]bool{}
 	var unresolved []string
 	for index, stack := range scan.Stacks {
@@ -646,6 +648,23 @@ func resolveCommands(scan model.ScanResult, answers model.Answers) (model.ScanRe
 		}
 		if len(copyStack.Commands) == 0 && !answers.CommandWaiver(key) {
 			unresolved = append(unresolved, "commands:"+key)
+		}
+		for gate, command := range copyStack.Commands {
+			coverage, ok := matchingCICommand(scan.CICommands, copyStack.Path, command)
+			if !ok {
+				continue
+			}
+			delete(copyStack.Commands, gate)
+			resolved.ExternalCICoverage = append(resolved.ExternalCICoverage, model.ExternalCICoverage{
+				StackKind: copyStack.Kind,
+				StackPath: copyStack.Path,
+				Gate:      gate,
+				Provider:  coverage.Provider,
+				File:      coverage.File,
+				Job:       coverage.Job,
+				Workdir:   coverage.Workdir,
+				Command:   append([]string(nil), coverage.Command...),
+			})
 		}
 		resolved.Stacks[index] = copyStack
 	}
@@ -660,7 +679,48 @@ func resolveCommands(scan model.ScanResult, answers model.Answers) (model.ScanRe
 		}
 	}
 	sort.Strings(unresolved)
+	sort.Slice(resolved.ExternalCICoverage, func(i, j int) bool {
+		left, right := resolved.ExternalCICoverage[i], resolved.ExternalCICoverage[j]
+		return left.StackKind+"\x00"+left.StackPath+"\x00"+left.Gate+"\x00"+left.Provider+"\x00"+left.File+"\x00"+left.Job < right.StackKind+"\x00"+right.StackPath+"\x00"+right.Gate+"\x00"+right.Provider+"\x00"+right.File+"\x00"+right.Job
+	})
 	return resolved, unresolved, nil
+}
+
+func matchingCICommand(commands []model.CICommand, workdir string, command []string) (model.CICommand, bool) {
+	if !safeRelative(workdir) || len(command) == 0 {
+		return model.CICommand{}, false
+	}
+	workdir = normalizeWorkdir(workdir)
+	for _, candidate := range commands {
+		if (candidate.Provider != "github" && candidate.Provider != "gitlab") || strings.TrimSpace(candidate.File) == "" || strings.TrimSpace(candidate.Job) == "" || !safeRelative(candidate.File) || !safeRelative(candidate.Workdir) {
+			continue
+		}
+		if normalizeWorkdir(candidate.Workdir) != workdir || !sameCommand(candidate.Command, command) {
+			continue
+		}
+		return candidate, true
+	}
+	return model.CICommand{}, false
+}
+
+func normalizeWorkdir(value string) string {
+	value = filepath.ToSlash(filepath.Clean(strings.TrimSpace(value)))
+	if value == "" || value == "." {
+		return "."
+	}
+	return value
+}
+
+func sameCommand(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func hasWorkflowPrefix(values []string) bool {

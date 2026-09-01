@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-var HarnessVersion = "0.7.6"
+var HarnessVersion = "0.8.0"
 
 const SchemaVersion = "1"
 
@@ -210,17 +210,38 @@ type GitState struct {
 	RemoteHost string `json:"remote_host,omitempty"`
 }
 
+type CICommand struct {
+	Provider string   `json:"provider" yaml:"provider"`
+	File     string   `json:"file" yaml:"file"`
+	Job      string   `json:"job" yaml:"job"`
+	Workdir  string   `json:"workdir" yaml:"workdir"`
+	Command  []string `json:"command" yaml:"command"`
+}
+
+type ExternalCICoverage struct {
+	StackKind string   `json:"stack_kind" yaml:"stack_kind"`
+	StackPath string   `json:"stack_path" yaml:"stack_path"`
+	Gate      string   `json:"gate" yaml:"gate"`
+	Provider  string   `json:"provider" yaml:"provider"`
+	File      string   `json:"file" yaml:"file"`
+	Job       string   `json:"job" yaml:"job"`
+	Workdir   string   `json:"workdir" yaml:"workdir"`
+	Command   []string `json:"command" yaml:"command"`
+}
+
 type ScanResult struct {
-	Root            string   `json:"root"`
-	Fingerprint     string   `json:"fingerprint"`
-	Git             GitState `json:"git"`
-	Stacks          []Stack  `json:"stacks"`
-	CIProviders     []string `json:"ci_providers"`
-	HasUI           bool     `json:"has_ui"`
-	HasPersistence  bool     `json:"has_persistence"`
-	HasDeployment   bool     `json:"has_deployment"`
-	ExistingHarness bool     `json:"existing_harness"`
-	Questions       []string `json:"questions"`
+	Root               string               `json:"root"`
+	Fingerprint        string               `json:"fingerprint"`
+	Git                GitState             `json:"git"`
+	Stacks             []Stack              `json:"stacks"`
+	CIProviders        []string             `json:"ci_providers"`
+	CICommands         []CICommand          `json:"ci_commands,omitempty"`
+	ExternalCICoverage []ExternalCICoverage `json:"external_ci_coverage,omitempty"`
+	HasUI              bool                 `json:"has_ui"`
+	HasPersistence     bool                 `json:"has_persistence"`
+	HasDeployment      bool                 `json:"has_deployment"`
+	ExistingHarness    bool                 `json:"existing_harness"`
+	Questions          []string             `json:"questions"`
 }
 
 type Answers struct {
@@ -429,6 +450,7 @@ type CIConfig struct {
 	AgentRuntime                 *CIAgentRuntime              `json:"agent_runtime,omitempty" yaml:"agent_runtime,omitempty"`
 	GitLabImage                  string                       `json:"gitlab_image,omitempty" yaml:"gitlab_image,omitempty"`
 	GitLabExternalPipelinePolicy bool                         `json:"gitlab_external_pipeline_policy,omitempty" yaml:"gitlab_external_pipeline_policy,omitempty"`
+	ExternalCoverage             []ExternalCICoverage         `json:"external_coverage,omitempty" yaml:"external_coverage,omitempty"`
 }
 
 type ReleaseConfig struct {
@@ -508,6 +530,7 @@ type Plan struct {
 	Unresolved                   []string               `json:"unresolved"`
 	Deferred                     []string               `json:"deferred,omitempty"`
 	ProposedGuardDefaults        map[string]CommandSpec `json:"proposed_guard_defaults,omitempty"`
+	ExternalCICoverage           []ExternalCICoverage   `json:"external_ci_coverage,omitempty"`
 	ProposedReviewerHost         string                 `json:"proposed_reviewer_host,omitempty"`
 	ProposedReviewerCommand      []string               `json:"proposed_reviewer_command,omitempty"`
 	ProposedBrowserCommand       []string               `json:"proposed_browser_command,omitempty"`

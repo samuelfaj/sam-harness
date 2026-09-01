@@ -63,7 +63,7 @@ Esses pedidos executam `sam-harness onboard`, `sam-harness adopt --auto` ou `sam
 
 ## Como funciona
 
-1. `scan` lê manifests, comandos, workspaces, CI, estado do Git e indícios de interface, persistência e deploy. Ele não edita o repositório.
+1. `scan` lê manifests, comandos, workspaces, CI, estado do Git e indícios de interface, persistência e deploy. Ele registra comandos literais de jobs GitLab e GitHub com seus diretórios efetivos; uma correspondência exata já pertencente à CI do cliente aparece no plano e é omitida dos gates gerados pelo Harness. Comandos dinâmicos ou não equivalentes continuam obrigatórios. Ele não edita o repositório.
 2. O agente pergunta apenas sobre fatos de negócio que o código não prova, como criticidade, sensibilidade dos dados, uso em produção, autoridade, design, rollback, responsáveis, comandos ambíguos e um provedor de CI não detectado.
 3. `plan` recomenda `baseline`, `production` ou `regulated` e lista cada operação sob um identificador criptográfico que expira após 30 minutos.
 4. O usuário revisa e aprova esse identificador.
@@ -151,7 +151,7 @@ Se a publicação de change request estiver habilitada e autorizada separadament
 Para atualizar uma instalação legada de produção, informe as decisões obrigatórias do workflow da versão atual em um arquivo de respostas:
 
 ```bash
-sam-harness upgrade /caminho/do/repositorio --to 0.7.6 --answers /tmp/sam-harness-respostas-v0.7.json
+sam-harness upgrade /caminho/do/repositorio --to 0.8.0 --answers /tmp/sam-harness-respostas-v0.8.json
 ```
 
 `upgrade` combina as respostas explícitas com a configuração instalada e produz um plano com expiração; ele não aplica o plano. Revise decisões pendentes e todas as operações, depois aprove e aplique o novo ID exato. Use o [formato da configuração do workflow](../skills/sam-harness/references/workflow-configuration.md) para a cobertura de guards `static`/`test`, as decisões sobre nomes de secrets, ambiente protegido dos agentes e control plane do provedor, as atestações de filesystem e de comando confiável, e os comandos de ciclo que uma configuração legada de produção v0.1 não contém.

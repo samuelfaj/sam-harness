@@ -100,7 +100,12 @@
         },
         "agent_runtime": { "$ref": "#/$defs/ci_agent_runtime" },
         "gitlab_image": { "type": "string", "minLength": 1 },
-        "gitlab_external_pipeline_policy": { "type": "boolean" }
+        "gitlab_external_pipeline_policy": { "type": "boolean" },
+        "external_coverage": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/external_ci_coverage" },
+          "minItems": 1
+        }
       }
     },
     "release": { "$ref": "#/$defs/release" },
@@ -149,6 +154,21 @@
       "additionalProperties": false,
       "required": ["workdir", "command"],
       "properties": {
+        "workdir": { "type": "string", "minLength": 1 },
+        "command": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+      }
+    },
+    "external_ci_coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stack_kind", "stack_path", "gate", "provider", "file", "job", "workdir", "command"],
+      "properties": {
+        "stack_kind": { "enum": ["typescript", "python", "go", "rust"] },
+        "stack_path": { "type": "string", "minLength": 1 },
+        "gate": { "type": "string", "minLength": 1 },
+        "provider": { "enum": ["github", "gitlab"] },
+        "file": { "type": "string", "minLength": 1 },
+        "job": { "type": "string", "minLength": 1 },
         "workdir": { "type": "string", "minLength": 1 },
         "command": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
       }
