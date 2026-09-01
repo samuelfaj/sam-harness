@@ -52,8 +52,10 @@ func loadPriorReviewReceipt(root string, cfg model.Config, requested string) (st
 	if prior.Repository != cfg.Repository {
 		return "", "", Receipt{}, errors.New("prior review receipt belongs to a different repository")
 	}
-	if prior.Passed || prior.Status != StatusBlocked || strings.TrimSpace(prior.Error) == "" || prior.ArbiterBlocked {
-		return "", "", Receipt{}, errors.New("prior review receipt must be a blocked review with failure evidence")
+	blockedInitial := !prior.Passed && prior.Status == StatusBlocked && strings.TrimSpace(prior.Error) != ""
+	passedInitial := prior.Passed && prior.Status == StatusPassed && strings.TrimSpace(prior.Error) == ""
+	if (!blockedInitial && !passedInitial) || prior.ArbiterBlocked {
+		return "", "", Receipt{}, errors.New("prior review receipt must be a complete initial review with a frozen manifest")
 	}
 	if prior.StartedAt.IsZero() || prior.FinishedAt.IsZero() || prior.FinishedAt.Before(prior.StartedAt) || filepath.Base(path) != receiptFilename(prior) {
 		return "", "", Receipt{}, errors.New("prior review receipt has invalid timestamps or non-canonical filename")
