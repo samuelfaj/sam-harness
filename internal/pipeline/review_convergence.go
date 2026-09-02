@@ -17,6 +17,20 @@ import (
 	"github.com/samuelfaj/sam-harness/internal/model"
 )
 
+func reviewManifestForRole(manifest *RepairManifest, role model.ReviewerRole) *RepairManifest {
+	if manifest == nil {
+		return nil
+	}
+	filtered := *manifest
+	filtered.Actions = make([]Finding, 0, len(manifest.Actions))
+	for _, action := range manifest.Actions {
+		if action.Role == role {
+			filtered.Actions = append(filtered.Actions, action)
+		}
+	}
+	return &filtered
+}
+
 func loadPriorReviewReceipt(root string, cfg model.Config, requested string) (string, string, Receipt, error) {
 	if strings.TrimSpace(requested) == "" {
 		return "", "", Receipt{}, nil

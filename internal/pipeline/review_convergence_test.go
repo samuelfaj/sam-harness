@@ -21,6 +21,26 @@ func convergenceTestFinding(role model.ReviewerRole, severity, path string, line
 	}
 }
 
+func TestReviewManifestPromptIsScopedToReviewerRole(t *testing.T) {
+	manifest := &RepairManifest{
+		SchemaVersion: "2",
+		Repository:    "fixture",
+		LineageSHA256: strings.Repeat("a", 64),
+		Actions: []Finding{
+			convergenceTestFinding(model.ReviewerArchitecture, "P2", "architecture.go", 1),
+			convergenceTestFinding(model.ReviewerBusinessRules, "P2", "rules.go", 1),
+		},
+	}
+
+	filtered := reviewManifestForRole(manifest, model.ReviewerArchitecture)
+	if filtered == nil || len(filtered.Actions) != 1 || filtered.Actions[0].Role != model.ReviewerArchitecture {
+		t.Fatalf("reviewer received actions from another role: %#v", filtered)
+	}
+	if len(manifest.Actions) != 2 {
+		t.Fatalf("role filter mutated the original manifest: %#v", manifest)
+	}
+}
+
 func convergenceTestReceipt(t *testing.T, root, headSHA string, finding Finding) Receipt {
 	t.Helper()
 	receipt := Receipt{
