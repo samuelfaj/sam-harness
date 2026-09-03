@@ -112,6 +112,53 @@ func TestBuildPreservesExistingInstructions(t *testing.T) {
 	}
 }
 
+func TestBuildInstructsCIUnificationAndDeliveryGraph(t *testing.T) {
+	t.Parallel()
+	operations := buildProductionOperations(t, t.TempDir())
+	agents := operationContent(t, operations, "AGENTS.md")
+	workflow := operationContent(t, operations, ".sam-harness/WORKFLOW.md")
+	gates := operationContent(t, operations, ".sam-harness/GATES.md")
+	gitlab := operationContent(t, operations, ".sam-harness/ci/gitlab.yml")
+	github := operationContent(t, operations, ".github/workflows/sam-harness.yml")
+	for name, content := range map[string]string{
+		"AGENTS.md": agents, "WORKFLOW.md": workflow, "GATES.md": gates, "gitlab.yml": gitlab, "github workflow": github,
+	} {
+		for _, expected := range []string{model.DeliveryHappyPath, model.DeliveryExceptionPath} {
+			if !strings.Contains(content, expected) {
+				t.Fatalf("%s missing %q:\n%s", name, expected, content)
+			}
+		}
+	}
+	for _, expected := range []string{
+		"unify redundant host CI",
+		"keep generated `sam-harness-*` jobs",
+	} {
+		if !strings.Contains(agents, expected) {
+			t.Fatalf("AGENTS.md missing %q:\n%s", expected, agents)
+		}
+	}
+	for _, expected := range []string{
+		"## Delivery graph",
+		"## Unify redundant CI",
+		"Prefer generated `sam-harness-*` jobs",
+		"ci.external_coverage",
+		"Do not collapse the graph into one stage",
+	} {
+		if !strings.Contains(workflow, expected) {
+			t.Fatalf("WORKFLOW.md missing %q:\n%s", expected, workflow)
+		}
+	}
+	if !strings.Contains(gates, "## CI unification") {
+		t.Fatalf("GATES.md missing CI unification:\n%s", gates)
+	}
+	if !strings.Contains(gitlab, "stage: check") || strings.Contains(gitlab, "stage: static") || strings.Contains(gitlab, "stage: production\n") {
+		t.Fatalf("GitLab jobs are not mapped onto the delivery graph:\n%s", gitlab)
+	}
+	if !strings.Contains(gitlab, "stage: repair") {
+		t.Fatalf("GitLab exception jobs are not on the repair stage:\n%s", gitlab)
+	}
+}
+
 func TestManagedRootAgentsPinsCurrentHarnessVersion(t *testing.T) {
 	t.Parallel()
 	want := "This repository uses sam-harness " + model.HarnessVersion + " with the production profile."
@@ -226,8 +273,8 @@ func TestBuildSeparatesConfirmedBrowserChecksIntoE2EPhase(t *testing.T) {
 	}
 
 	gitlab := operationContent(t, operations, ".sam-harness/ci/gitlab.yml")
-	if !strings.Contains(gitlab, "  - e2e\n") || !strings.Contains(gitlab, "sam-harness-e2e:\n") || !strings.Contains(gitlab, "--phase e2e") {
-		t.Fatalf("GitLab e2e job is missing:\n%s", gitlab)
+	if !strings.Contains(gitlab, "  - verify\n") || !strings.Contains(gitlab, "sam-harness-e2e:\n") || !strings.Contains(gitlab, "--phase e2e") || !strings.Contains(gitlab, "stage: verify") {
+		t.Fatalf("GitLab e2e job is missing from the verify stage:\n%s", gitlab)
 	}
 	artifact := contentSection(t, gitlab, "sam-harness-artifact:\n", "sam-harness-staging:\n")
 	if !strings.Contains(artifact, "job: sam-harness-e2e") {
@@ -1026,6 +1073,9 @@ func TestBuildDocumentsInventoryExecutableControlsAndProviderBoundaries(t *testi
 		"sam_harness_merge_group_review",
 		"external merge-queue dispatcher",
 		"trusted/review-control",
+		model.DeliveryHappyPath,
+		model.DeliveryExceptionPath,
+		"## Unify redundant CI",
 	} {
 		if !strings.Contains(workflow, expected) {
 			t.Fatalf("WORKFLOW.md missing %q:\n%s", expected, workflow)
@@ -1104,13 +1154,21 @@ func TestBuildGitLabRendersLifecycleAndManualTrustedRepairPublisher(t *testing.T
 		t.Fatalf("generated GitLab workflow is not YAML: %v\n%s", err, content)
 	}
 	for _, expected := range []string{
-		"  - static",
+		"  - check",
 		"  - test",
-		"  - review",
-		"  - artifact",
-		"  - staging",
-		"  - production",
-		"  - observe",
+		"  - build",
+		"  - deploy",
+		"  - verify",
+		"  - release",
+		"  - monitor",
+		"  - repair",
+		model.DeliveryHappyPath,
+		model.DeliveryExceptionPath,
+		"stage: check",
+		"stage: build",
+		"stage: deploy",
+		"stage: release",
+		"stage: monitor",
 		"sam-harness-production:",
 		"merge_request_event",
 		"name: production",

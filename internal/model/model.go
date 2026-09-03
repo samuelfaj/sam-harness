@@ -6,7 +6,12 @@ import (
 	"time"
 )
 
-var HarnessVersion = "0.9.1"
+var HarnessVersion = "0.10.0"
+
+const (
+	DeliveryHappyPath     = "check → test → build → deploy → verify → release → monitor"
+	DeliveryExceptionPath = "failure → repair / rollback → verify"
+)
 
 const SchemaVersion = "1"
 

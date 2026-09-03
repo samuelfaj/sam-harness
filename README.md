@@ -40,9 +40,10 @@ Pregunta lo que el repositorio no demuestra, adáptalo al proyecto, implementa l
 3. `plan` recommends `baseline`, `production`, or `regulated`, then records the exact file operations under a cryptographic plan ID that expires after 30 minutes.
 4. The user reviews and approves that ID.
 5. `apply` rejects stale repository state and writes only the approved operations.
-6. `doctor` validates the installed structure. `check` runs the configured local gates and writes an evidence receipt.
-7. `pipeline` runs an approved phase—static checks, tests, E2E, pre-merge six-role review, artifact, staging, production, observation, rollback, or migration—and writes a phase-specific receipt. Confirmed browser commands run in the dedicated E2E phase, never inside static or unit-test jobs.
-8. If `static`, `test`, `review`, or `artifact` fails and correction was explicitly enabled, `repair` validates the current receipt, runs the configured command in an isolated Git sandbox, enforces cumulative attempt/file/line budgets, reruns static checks and tests, and emits a correction-only patch with its SHA-256. Failed review receipts carry one frozen hashed repair manifest containing every reviewer's exact required change and observable acceptance condition, so correction addresses all known work together before one independent convergence re-review.
+6. After apply, unify redundant host CI: keep generated `sam-harness-*` jobs and remove host jobs that only repeat those gates. Suggested stages: check → test → build → deploy → verify → release → monitor. Exception path: failure → repair / rollback → verify.
+7. `doctor` validates the installed structure. `check` runs the configured local gates and writes an evidence receipt.
+8. `pipeline` runs an approved phase—static checks, tests, E2E, pre-merge six-role review, artifact, staging, production, observation, rollback, or migration—and writes a phase-specific receipt. Confirmed browser commands run in the dedicated E2E phase, never inside static or unit-test jobs.
+9. If `static`, `test`, `review`, or `artifact` fails and correction was explicitly enabled, `repair` validates the current receipt, runs the configured command in an isolated Git sandbox, enforces cumulative attempt/file/line budgets, reruns static checks and tests, and emits a correction-only patch with its SHA-256. Failed review receipts carry one frozen hashed repair manifest containing every reviewer's exact required change and observable acceptance condition, so correction addresses all known work together before one independent convergence re-review.
 
 Sam Harness preserves existing `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, Copilot instructions, `.gitignore`, and GitLab CI content through bounded managed blocks. It adds workflow, reviewer, change-budget, observation, and retirement guidance without replacing user-owned content.
 
@@ -125,7 +126,7 @@ If change-request publishing is enabled and separately authorized, CI sends that
 To upgrade a legacy production installation, provide the required current-version workflow decisions in an answers file:
 
 ```bash
-sam-harness upgrade /path/to/repository --to 0.9.1 --answers /tmp/sam-harness-v0.9-answers.json
+sam-harness upgrade /path/to/repository --to 0.10.0 --answers /tmp/sam-harness-v0.10-answers.json
 ```
 
 `upgrade` merges explicit answers over the installed configuration and produces an expiring plan; it does not apply it. Review unresolved decisions and every operation, then approve and apply the exact new plan ID. Use the [workflow configuration shape](skills/sam-harness/references/workflow-configuration.md) for the static/test guard coverage, provider secret-name, protected-agent-environment and agent-control-plane decisions, filesystem and trusted-command attestations, and lifecycle commands that legacy v0.1 production configuration does not contain.

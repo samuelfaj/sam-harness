@@ -91,6 +91,22 @@ If the command reports a stale fingerprint, scan and plan again. Do not reuse th
 
 After application, run `doctor` before `check`. A failed command stays failed until the repository or configuration changes and the exact command passes.
 
+Then unify redundant host CI. Prefer generated `sam-harness-*` jobs as the canonical gates. Inventory host GitHub/GitLab jobs against `sam-harness-static`, `sam-harness-test`, `sam-harness-e2e`, `sam-harness-artifact`, and the other generated phase jobs. Delete or disable host jobs whose argv only repeats those gates (lint, typecheck, unit, contract, frontend build, or Playwright that the harness job already runs). Keep unique host work: the live deploy path, infrastructure, seed, and a host review that Harness does not own.
+
+Use these CI stages:
+
+```text
+check → test → build → deploy → verify → release → monitor
+```
+
+Exception path:
+
+```text
+failure → repair / rollback → verify
+```
+
+After repair or rollback, re-enter verify. Do not collapse the graph into one stage. Independent jobs use `needs: []`. Parent GitLab `stages:` wins over the include, so list every stage used by generated jobs, including `repair`. If `ci.external_coverage` names a host job you are deleting, move that command into a Harness gate first, then retarget or drop the coverage entry so doctor still names a job that exists.
+
 Application installs the workflow contract; it does not execute staging, production, rollback, or migration. After `doctor`, use [lifecycle.md](lifecycle.md) only for phases the user has separately authorized.
 
 Secret bindings, agent-environment mappings, and control-plane fields store identifiers, never values. Sam Harness does not provision provider credentials, install the GitHub App, create the GitLab external project, or prove remote settings from generated YAML.
@@ -110,7 +126,7 @@ Generated secret-bearing jobs use a trusted released matching-version CLI and pa
 A legacy production or regulated configuration does not contain the required current-version workflow, CI secret decision, protected agent-environment/control-plane mappings, filesystem attestations, or trusted-external-command decisions. Collect the complete [workflow configuration](workflow-configuration.md), including provider bindings or explicit waivers, protected agent environments, control planes, verified reviewer/correction attestations, and any trusted config argv positions, in a temporary answers file outside the repository, then run:
 
 ```text
-sam-harness upgrade <root> --to 0.9.1 --answers <answers-file>
+sam-harness upgrade <root> --to 0.10.0 --answers <answers-file>
 ```
 
 Show unresolved decisions, every file operation, and the new plan ID. Apply only after the user approves that exact ID. If the repository fingerprint changes or the plan expires, discard it and create another upgrade plan.

@@ -746,6 +746,9 @@ func printProposal(w io.Writer, plan model.Plan, answers model.Answers, coverage
 	for _, item := range coverage {
 		fmt.Fprintf(w, "  - %s %s %s\n", item.ID, item.State, item.Reason)
 	}
+	fmt.Fprintf(w, "Suggested CI stages (happy path): %s\n", model.DeliveryHappyPath)
+	fmt.Fprintf(w, "Exception path: %s\n", model.DeliveryExceptionPath)
+	fmt.Fprintln(w, "After apply, unify redundant host CI: keep sam-harness-* jobs; remove host jobs that only repeat those gates.")
 }
 
 func finishReport(locale string, sourcePresent bool) map[string]string {

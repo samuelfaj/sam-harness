@@ -15,6 +15,7 @@ Turn the repository's real commands, architecture, delivery path, and risk into 
 - Treat `filesystem_read_only` and `filesystem_sandboxed` as user attestations about the configured executable. Verify its actual flags and environment; Sam Harness does not turn arbitrary argv into an OS sandbox.
 - `repair` requires enabled correction plus `write_repository` and `network` authority. It accepts only a current failed `static`, `test`, `review`, or `artifact` receipt. Failed review receipts must carry one intact, conflict-free manifest containing every reviewer's exact required change and observable acceptance condition. Apply every action together in the isolated Git sandbox, then accept only a budget-compliant delta that passes fresh `static` and `test` checks plus independent re-review.
 - Separate source, local checks, commit, remote, review, CI, artifact, staging, production, observation, and rollback proof.
+- After install or upgrade, unify redundant host CI: keep generated `sam-harness-*` jobs and remove host jobs that only repeat those gates. Suggested stages: check → test → build → deploy → verify → release → monitor. Exception path: failure → repair / rollback → verify. Do not collapse that graph into one stage.
 - Never apply a plan until the user approves its exact plan ID.
 - Treat every plan as short-lived. If it expires, scan again and obtain approval for the new ID.
 - Never commit, push, open a change request, release, deploy, alter credentials, or perform an irreversible action unless the user grants that exact authority.
@@ -33,7 +34,7 @@ Turn the repository's real commands, architecture, delivery path, and risk into 
 ## Route the request
 
 - A request that only names https://github.com/samuelfaj/sam-harness, `$sam-harness`, `sam-harness onboard`, `adopt --auto`, or `adopt --guided` is an adoption request. Prefer this installed skill. Do not download the CLI until the operator asks; then use the bootstrap scripts so checksum, signature, and version are verified. Link-first and installed-skill paths must produce the same canonical plan for the same repository and answers.
-- To install or change the harness, read [references/adoption.md](references/adoption.md). It covers discovery, guided interview, coverage map, decisions, planning, approval, application, missing-control implementation, provider bootstrap, freeze checks, and structural validation.
+- To install or change the harness, read [references/adoption.md](references/adoption.md). It covers discovery, guided interview, coverage map, decisions, planning, approval, application, host-CI unification, missing-control implementation, provider bootstrap, freeze checks, and structural validation.
 - To run a configured phase, the full lifecycle, or bounded correction, read [references/lifecycle.md](references/lifecycle.md).
 - When an installed repository contains local lifecycle skills, nested workspace instructions, or review templates, read [references/installed-agent-system.md](references/installed-agent-system.md) before selecting context or preparing a review.
 - To audit evidence or cross a remote, release, deployment, migration, security-sensitive, or delegated boundary, read [references/evidence-and-authority.md](references/evidence-and-authority.md).
