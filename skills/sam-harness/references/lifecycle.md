@@ -2,6 +2,10 @@
 
 Use this reference after an approved plan has installed a valid workflow. Read `.sam-harness/WORKFLOW.md`, `.sam-harness/REVIEWERS.md`, `.sam-harness/CHANGE_BUDGET.md`, and the runbook for the requested phase before execution.
 
+## Delivery graph
+
+Host CI should follow `check → test → build → deploy → verify → release → monitor`. On failure, take `repair` or `rollback`, then re-enter `verify`. Prefer generated `sam-harness-*` jobs over host jobs that only repeat those gates. These CI stage names are not the same as `sam-harness pipeline --phase` values (`static`, `test`, `e2e`, `review`, `artifact`, `staging`, `production`, `observe`, `rollback`, `migration`).
+
 ## Select the phase
 
 Run only the smallest phase that answers the user's request:

@@ -9,6 +9,10 @@ A gate advances only when its stated evidence exists. Fluent output is not evide
 - [ ] `go:.:typecheck` in `.`: `go vet ./...`
 - [ ] `complete customer installation lifecycle` in `.`: `sh testdata/e2e-full-flow.sh`
 
+## CI unification
+
+Prefer generated `sam-harness-*` jobs over host jobs that only repeat the same gates. Suggested stages: check → test → build → deploy → verify → release → monitor. Exception path: failure → repair / rollback → verify.
+
 ## Static guard command-or-waiver inventory
 
 - format command `gofmt is clean` in `.` (120s): `'sh' '-c' 'test -z "$(gofmt -l .)"'`

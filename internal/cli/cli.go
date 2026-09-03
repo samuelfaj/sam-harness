@@ -147,7 +147,7 @@ func (c *CLI) plan(args []string) error {
 	}
 	fmt.Fprintf(c.Stdout, "Plan ID: %s\nPlan file: %s\nRecommended profile: %s\nApplied profile: %s\n", plan.ID, path, plan.RecommendedProfile, plan.AppliedProfile)
 	if len(plan.ExternalCICoverage) > 0 {
-		fmt.Fprintln(c.Stdout, "Commands already covered by client CI (duplicate Harness gates omitted):")
+		fmt.Fprintln(c.Stdout, "Exact client CI coverage (Harness will not schedule a second copy). Prefer sam-harness jobs: if you remove the host job, move the command into a Harness gate first:")
 		for _, coverage := range plan.ExternalCICoverage {
 			fmt.Fprintf(c.Stdout, "  - %s:%s:%s -> %s %s/%s in %s\n", coverage.StackKind, coverage.StackPath, coverage.Gate, coverage.Provider, coverage.File, coverage.Job, coverage.Workdir)
 		}
@@ -182,6 +182,9 @@ func (c *CLI) plan(args []string) error {
 	for _, operation := range plan.Operations {
 		fmt.Fprintf(c.Stdout, "  - %s %s\n", operation.Action, operation.Path)
 	}
+	fmt.Fprintf(c.Stdout, "Suggested CI stages (happy path): %s\n", model.DeliveryHappyPath)
+	fmt.Fprintf(c.Stdout, "Exception path: %s\n", model.DeliveryExceptionPath)
+	fmt.Fprintln(c.Stdout, "After apply, unify redundant host CI: keep sam-harness-* jobs; remove host jobs that only repeat those gates.")
 	fmt.Fprintf(c.Stdout, "Apply only after approval: sam-harness apply --plan %s --accept %s\n", path, plan.ID)
 	return nil
 }
@@ -769,6 +772,9 @@ func (c *CLI) upgrade(args []string) error {
 	for _, operation := range plan.Operations {
 		fmt.Fprintf(c.Stdout, "  - %s %s\n", operation.Action, operation.Path)
 	}
+	fmt.Fprintf(c.Stdout, "Suggested CI stages (happy path): %s\n", model.DeliveryHappyPath)
+	fmt.Fprintf(c.Stdout, "Exception path: %s\n", model.DeliveryExceptionPath)
+	fmt.Fprintln(c.Stdout, "After apply, unify redundant host CI: keep sam-harness-* jobs; remove host jobs that only repeat those gates.")
 	return nil
 }
 

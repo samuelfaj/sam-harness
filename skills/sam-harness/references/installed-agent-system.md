@@ -20,6 +20,8 @@ Repository-local Agent Skills live at `.agents/skills/sam-harness-<lifecycle>/SK
 
 The canonical `.sam-harness/config.yaml` remains the source of executable argv and waivers. A local skill cannot replace a missing command, overrule the nearest `AGENTS.md`, or authorize an external action.
 
+Host CI follows the delivery graph in `.sam-harness/WORKFLOW.md`: check → test → build → deploy → verify → release → monitor, with failure → repair / rollback → verify. Prefer generated `sam-harness-*` jobs over host jobs that only repeat those gates.
+
 ## Prepare human review
 
 The generated `.github/pull_request_template.md` and `.gitlab/merge_request_templates/sam-harness.md` carry the evidence ladder and the human-facing UX checklist inside bounded managed blocks. Fill only states backed by the current commit, receipts, provider readback, artifact digest, environment, or observation window. Leave unavailable or future states unchecked.

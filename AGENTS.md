@@ -1,7 +1,7 @@
 <!-- sam-harness:start -->
 ## Sam Harness
 
-This repository uses sam-harness 0.9.1 with the production profile.
+This repository uses sam-harness 0.10.0 with the production profile.
 
 Read these files before changing code:
 
@@ -15,4 +15,6 @@ Read these files before changing code:
 - [.sam-harness/UX_GATES.md](.sam-harness/UX_GATES.md) for user-facing work.
 
 Do not treat an edit, test, commit, push, review, CI run, artifact, deployment, or live observation as the same state. Report each state only with its own evidence. Preserve unrelated work. Do not commit, push, release, deploy, alter credentials, or perform an irreversible operation unless the user has granted that exact authority.
+
+After install or upgrade, unify redundant host CI: keep generated `sam-harness-*` jobs as the canonical gates and remove host jobs that only repeat those lint, typecheck, unit, contract, build, or browser commands. Suggested stages: check → test → build → deploy → verify → release → monitor. Exception path: failure → repair / rollback → verify.
 <!-- sam-harness:end -->

@@ -68,9 +68,10 @@ Esses pedidos executam `sam-harness onboard`, `sam-harness adopt --auto` ou `sam
 3. `plan` recomenda `baseline`, `production` ou `regulated` e lista cada operação sob um identificador criptográfico que expira após 30 minutos.
 4. O usuário revisa e aprova esse identificador.
 5. `apply` recusa um plano se o repositório mudou e grava somente as operações aprovadas.
-6. `doctor` verifica a estrutura instalada. `check` executa os gates locais configurados e grava um recibo de evidência.
-7. `pipeline` executa uma fase aprovada — checks estáticos, testes, review pré-merge com seis papéis, artefato, staging, produção, observação, rollback ou migração — e grava um recibo específico da fase.
-8. Se `static`, `test`, `review` ou `artifact` falhar e a correção tiver sido habilitada explicitamente, `repair` valida o recibo atual, executa o comando configurado em um sandbox Git isolado, aplica os limites cumulativos de tentativas/arquivos/linhas, repete `static` e `test` e emite um patch apenas da correção com seu SHA-256. Recibos de review com falha carregam um manifesto de reparo com hash contendo a mudança exata e o critério de aceitação observável de cada reviewer, para corrigir todo o trabalho conhecido junto antes do re-review independente.
+6. Depois do apply, unifique a CI do host: mantenha os jobs gerados `sam-harness-*` e remova jobs do host que só repetem esses gates. Stages sugeridos: check → test → build → deploy → verify → release → monitor. Caminho excepcional: failure → repair / rollback → verify.
+7. `doctor` verifica a estrutura instalada. `check` executa os gates locais configurados e grava um recibo de evidência.
+8. `pipeline` executa uma fase aprovada — checks estáticos, testes, review pré-merge com seis papéis, artefato, staging, produção, observação, rollback ou migração — e grava um recibo específico da fase.
+9. Se `static`, `test`, `review` ou `artifact` falhar e a correção tiver sido habilitada explicitamente, `repair` valida o recibo atual, executa o comando configurado em um sandbox Git isolado, aplica os limites cumulativos de tentativas/arquivos/linhas, repete `static` e `test` e emite um patch apenas da correção com seu SHA-256. Recibos de review com falha carregam um manifesto de reparo com hash contendo a mudança exata e o critério de aceitação observável de cada reviewer, para corrigir todo o trabalho conhecido junto antes do re-review independente.
 
 O Sam Harness preserva o conteúdo existente de `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, instruções do Copilot, `.gitignore` e GitLab CI por meio de blocos delimitados. Ele acrescenta orientações de workflow, revisores, orçamento de mudança, observação e aposentadoria sem substituir conteúdo do usuário.
 
@@ -151,7 +152,7 @@ Se a publicação de change request estiver habilitada e autorizada separadament
 Para atualizar uma instalação legada de produção, informe as decisões obrigatórias do workflow da versão atual em um arquivo de respostas:
 
 ```bash
-sam-harness upgrade /caminho/do/repositorio --to 0.9.1 --answers /tmp/sam-harness-respostas-v0.9.json
+sam-harness upgrade /caminho/do/repositorio --to 0.10.0 --answers /tmp/sam-harness-respostas-v0.10.json
 ```
 
 `upgrade` combina as respostas explícitas com a configuração instalada e produz um plano com expiração; ele não aplica o plano. Revise decisões pendentes e todas as operações, depois aprove e aplique o novo ID exato. Use o [formato da configuração do workflow](../skills/sam-harness/references/workflow-configuration.md) para a cobertura de guards `static`/`test`, as decisões sobre nomes de secrets, ambiente protegido dos agentes e control plane do provedor, as atestações de filesystem e de comando confiável, e os comandos de ciclo que uma configuração legada de produção v0.1 não contém.

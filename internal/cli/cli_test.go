@@ -27,8 +27,8 @@ func TestVersionPrintsHarnessVersion(t *testing.T) {
 	if stdout.String() != want {
 		t.Fatalf("version = %q, want %q", stdout.String(), want)
 	}
-	if model.HarnessVersion != "0.9.1" {
-		t.Fatalf("HarnessVersion = %q, want 0.9.1 for this release", model.HarnessVersion)
+	if model.HarnessVersion != "0.10.0" {
+		t.Fatalf("HarnessVersion = %q, want 0.10.0 for this release", model.HarnessVersion)
 	}
 }
 
@@ -215,7 +215,7 @@ func TestOnboardAdoptAutoAndGuidedPrintPlanBeforeWrite(t *testing.T) {
 					t.Fatalf("repository changed before --accept: %v", err)
 				}
 				out := stdout.String()
-				for _, want := range []string{"Plan ID:", "Operations:", "Authority:", "Gates:"} {
+				for _, want := range []string{"Plan ID:", "Operations:", "Authority:", "Gates:", model.DeliveryHappyPath, model.DeliveryExceptionPath, "unify redundant host CI"} {
 					if !strings.Contains(out, want) {
 						t.Fatalf("missing plan-before-write %q:\n%s", want, out)
 					}
