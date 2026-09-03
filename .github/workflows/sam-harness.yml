@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
@@ -44,7 +44,7 @@ jobs:
         with:
           go-version: "1.27.0"
       - name: Check out trusted base configuration
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           path: .sam-harness/evidence/trusted-control
@@ -89,7 +89,7 @@ jobs:
     needs: static
     if: github.event_name != 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
@@ -97,7 +97,7 @@ jobs:
         with:
           go-version: "1.27.0"
       - name: Check out trusted base configuration
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           path: .sam-harness/evidence/trusted-control
@@ -142,7 +142,7 @@ jobs:
     needs: test
     if: github.event_name != 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
@@ -163,7 +163,7 @@ jobs:
     needs: e2e
     if: github.event_name != 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
@@ -171,7 +171,7 @@ jobs:
         with:
           go-version: "1.27.0"
       - name: Check out trusted base configuration
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           path: .sam-harness/evidence/trusted-control
@@ -228,7 +228,7 @@ jobs:
     if: ${{ false }} # Required network, deploy, or release authority is not granted; keep this job structurally inactive.
     environment: 'staging'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
@@ -265,7 +265,7 @@ jobs:
     if: ${{ false }} # Required network, deploy, or release authority is not granted; keep this job structurally inactive.
     environment: 'staging'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
@@ -302,7 +302,7 @@ jobs:
     if: ${{ false }} # Required network, deploy, or release authority is not granted; keep this job structurally inactive.
     environment: 'GitHub Releases'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
@@ -339,7 +339,7 @@ jobs:
     if: ${{ false }} # Required network, deploy, or release authority is not granted; keep this job structurally inactive.
     environment: 'GitHub Releases'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
@@ -378,7 +378,7 @@ jobs:
       contents: read
     environment: 'GitHub Releases'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
