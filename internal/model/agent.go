@@ -10,6 +10,7 @@ const (
 	AgentHostClaudeCode = "claude-code"
 	AgentHostCodex      = "codex"
 	AgentHostGrok       = "grok"
+	AgentHostDistill    = "distill"
 	AgentHostOther      = "other"
 )
 
@@ -40,7 +41,7 @@ type CIAgentRuntime struct {
 func ParseAgentHost(value string) (host, other string, ok bool) {
 	value = strings.TrimSpace(value)
 	switch value {
-	case AgentHostClaudeCode, AgentHostCodex, AgentHostGrok:
+	case AgentHostClaudeCode, AgentHostCodex, AgentHostGrok, AgentHostDistill:
 		return value, "", true
 	}
 	if rest, found := strings.CutPrefix(value, AgentHostOther+":"); found {
@@ -83,7 +84,7 @@ func ParseAgentLogin(value string) (method, env, secret, reason string, ok bool)
 
 func (r CIAgentRuntime) HostComplete() bool {
 	switch r.Host {
-	case AgentHostClaudeCode, AgentHostCodex, AgentHostGrok:
+	case AgentHostClaudeCode, AgentHostCodex, AgentHostGrok, AgentHostDistill:
 		return r.HostOther == ""
 	case AgentHostOther:
 		return agentHostOtherPattern.MatchString(r.HostOther)
@@ -113,7 +114,7 @@ func (r *CIAgentRuntime) Validate() error {
 		return nil
 	}
 	if r.Host != "" && !r.HostComplete() {
-		return fmt.Errorf("ci_agent_host must be claude-code, codex, grok, or other:<name>")
+		return fmt.Errorf("ci_agent_host must be claude-code, codex, grok, distill, or other:<name>")
 	}
 	if r.LoginMethod != "" && !r.LoginComplete() {
 		return fmt.Errorf("ci_agent_login must be 'api_key ENV SECRET', 'oidc ENV SECRET', 'cli_token ENV SECRET', 'github_app', or 'manual <reason>'")

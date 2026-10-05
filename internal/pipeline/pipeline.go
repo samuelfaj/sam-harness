@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/samuelfaj/sam-harness/internal/jev"
 	"github.com/samuelfaj/sam-harness/internal/model"
 	"github.com/samuelfaj/sam-harness/internal/repo"
 )
@@ -111,50 +112,51 @@ type RepairAttempt struct {
 }
 
 type Receipt struct {
-	HarnessVersion            string            `json:"harness_version"`
-	Kind                      string            `json:"kind"`
-	Repository                string            `json:"repository"`
-	Root                      string            `json:"root"`
-	Phase                     model.Phase       `json:"phase,omitempty"`
-	ConfigSource              string            `json:"config_source"`
-	ConfigSHA256              string            `json:"config_sha256"`
-	Fingerprint               string            `json:"repository_fingerprint"`
-	FinalFingerprint          string            `json:"final_repository_fingerprint"`
-	StartedAt                 time.Time         `json:"started_at"`
-	FinishedAt                time.Time         `json:"finished_at"`
-	Commands                  []CommandResult   `json:"commands,omitempty"`
-	Findings                  []Finding         `json:"findings,omitempty"`
-	ExcludedFindings          []Finding         `json:"excluded_findings,omitempty"`
-	Artifact                  *ArtifactEvidence `json:"artifact,omitempty"`
-	Phases                    []PhaseResult     `json:"phases,omitempty"`
-	Attempts                  []RepairAttempt   `json:"attempts,omitempty"`
-	SourceReceipt             string            `json:"source_receipt,omitempty"`
-	ReviewBaseRoot            string            `json:"review_base_root,omitempty"`
-	ReviewBaseSHA             string            `json:"review_base_sha,omitempty"`
-	ReviewBaseFingerprint     string            `json:"review_base_fingerprint,omitempty"`
-	ReviewHeadSHA             string            `json:"review_head_sha,omitempty"`
-	ReviewHeadFingerprint     string            `json:"review_head_fingerprint,omitempty"`
-	ReviewPatch               string            `json:"review_patch,omitempty"`
-	ReviewPatchSHA256         string            `json:"review_patch_sha256,omitempty"`
-	ReviewLineageSHA256       string            `json:"review_lineage_sha256,omitempty"`
-	PriorReviewReceipt        string            `json:"prior_review_receipt,omitempty"`
-	PriorReviewReceiptSHA256  string            `json:"prior_review_receipt_sha256,omitempty"`
-	PriorReviewManifest       *RepairManifest   `json:"prior_review_manifest,omitempty"`
-	PriorReviewManifestSHA256 string            `json:"prior_review_manifest_sha256,omitempty"`
-	ReviewConvergence         string            `json:"review_convergence,omitempty"`
-	ResolvedFindingIDs        []string          `json:"resolved_finding_ids,omitempty"`
-	UnresolvedFindingIDs      []string          `json:"unresolved_finding_ids,omitempty"`
-	RegressionFindingIDs      []string          `json:"regression_finding_ids,omitempty"`
-	RepairPatch               string            `json:"repair_patch,omitempty"`
-	RepairPatchSHA256         string            `json:"repair_patch_sha256,omitempty"`
-	RepairManifest            *RepairManifest   `json:"repair_manifest,omitempty"`
-	RepairManifestSHA256      string            `json:"repair_manifest_sha256,omitempty"`
-	ReviewRisk                string            `json:"review_risk,omitempty"`
-	ArbiterBlocked            bool              `json:"arbiter_blocked,omitempty"`
-	ArbiterReason             string            `json:"arbiter_reason,omitempty"`
-	Passed                    bool              `json:"passed"`
-	Status                    Status            `json:"status"`
-	Error                     string            `json:"error,omitempty"`
+	HarnessVersion            string                 `json:"harness_version"`
+	Kind                      string                 `json:"kind"`
+	Repository                string                 `json:"repository"`
+	Root                      string                 `json:"root"`
+	Phase                     model.Phase            `json:"phase,omitempty"`
+	ConfigSource              string                 `json:"config_source"`
+	ConfigSHA256              string                 `json:"config_sha256"`
+	Fingerprint               string                 `json:"repository_fingerprint"`
+	FinalFingerprint          string                 `json:"final_repository_fingerprint"`
+	StartedAt                 time.Time              `json:"started_at"`
+	FinishedAt                time.Time              `json:"finished_at"`
+	Commands                  []CommandResult        `json:"commands,omitempty"`
+	Findings                  []Finding              `json:"findings,omitempty"`
+	ExcludedFindings          []Finding              `json:"excluded_findings,omitempty"`
+	Artifact                  *ArtifactEvidence      `json:"artifact,omitempty"`
+	Phases                    []PhaseResult          `json:"phases,omitempty"`
+	Attempts                  []RepairAttempt        `json:"attempts,omitempty"`
+	SourceReceipt             string                 `json:"source_receipt,omitempty"`
+	ReviewBaseRoot            string                 `json:"review_base_root,omitempty"`
+	ReviewBaseSHA             string                 `json:"review_base_sha,omitempty"`
+	ReviewBaseFingerprint     string                 `json:"review_base_fingerprint,omitempty"`
+	ReviewHeadSHA             string                 `json:"review_head_sha,omitempty"`
+	ReviewHeadFingerprint     string                 `json:"review_head_fingerprint,omitempty"`
+	ReviewPatch               string                 `json:"review_patch,omitempty"`
+	ReviewPatchSHA256         string                 `json:"review_patch_sha256,omitempty"`
+	ReviewLineageSHA256       string                 `json:"review_lineage_sha256,omitempty"`
+	PriorReviewReceipt        string                 `json:"prior_review_receipt,omitempty"`
+	PriorReviewReceiptSHA256  string                 `json:"prior_review_receipt_sha256,omitempty"`
+	PriorReviewManifest       *RepairManifest        `json:"prior_review_manifest,omitempty"`
+	PriorReviewManifestSHA256 string                 `json:"prior_review_manifest_sha256,omitempty"`
+	ReviewConvergence         string                 `json:"review_convergence,omitempty"`
+	ResolvedFindingIDs        []string               `json:"resolved_finding_ids,omitempty"`
+	UnresolvedFindingIDs      []string               `json:"unresolved_finding_ids,omitempty"`
+	RegressionFindingIDs      []string               `json:"regression_finding_ids,omitempty"`
+	RepairPatch               string                 `json:"repair_patch,omitempty"`
+	RepairPatchSHA256         string                 `json:"repair_patch_sha256,omitempty"`
+	RepairManifest            *RepairManifest        `json:"repair_manifest,omitempty"`
+	RepairManifestSHA256      string                 `json:"repair_manifest_sha256,omitempty"`
+	ReviewRisk                string                 `json:"review_risk,omitempty"`
+	ArbiterBlocked            bool                   `json:"arbiter_blocked,omitempty"`
+	ArbiterReason             string                 `json:"arbiter_reason,omitempty"`
+	ReviewTriage              []ReviewTriageDecision `json:"review_triage,omitempty"`
+	Passed                    bool                   `json:"passed"`
+	Status                    Status                 `json:"status"`
+	Error                     string                 `json:"error,omitempty"`
 }
 
 type commandExecution struct {
@@ -305,6 +307,7 @@ func RunWithOptions(path string, phase model.Phase, writeReceipt bool, options R
 			receipt.ReviewRisk = phaseReceipt.ReviewRisk
 			receipt.ArbiterBlocked = phaseReceipt.ArbiterBlocked
 			receipt.ArbiterReason = phaseReceipt.ArbiterReason
+			receipt.ReviewTriage = phaseReceipt.ReviewTriage
 		}
 		if phaseReceipt.Artifact != nil {
 			artifact = phaseReceipt.Artifact
@@ -768,8 +771,20 @@ func runReview(root string, cfg model.Config, context phaseContext, receipt *Rec
 		mutated   bool
 	}
 	results := make([]reviewResult, len(orderedReviewers))
+	var triage []ReviewTriageDecision
+	// Convergence re-reviews must verify every prior action, so only initial reviews are triaged.
+	if len(change.patch) > 0 && priorPath == "" {
+		if client, ok := jev.FromEnvironment(); ok {
+			triage = reviewTriage(client, change.patch, orderedReviewers)
+			receipt.ReviewTriage = triage
+		}
+	}
 	var reviewers sync.WaitGroup
 	for index, reviewer := range orderedReviewers {
+		if triage != nil && triage[index].Skipped {
+			results[index].execution.result = skippedReviewResult(reviewer, triage[index])
+			continue
+		}
 		reviewers.Add(1)
 		go func(index int, reviewer model.ReviewerConfig) {
 			defer reviewers.Done()
@@ -1832,6 +1847,13 @@ func scopedCommandEnvironment(cfg model.Config, scope, home string) ([]string, [
 	}
 	seen := map[string]bool{}
 	secrets := make([]string, 0)
+	// Model names are not secret; the key reaches agents only through a scoped secret binding,
+	// which also enables the trusted-command checks for that scope.
+	for _, name := range []string{jev.EnvModel, jev.EnvJevModel} {
+		if value, ok := os.LookupEnv(name); ok {
+			environment = append(environment, name+"="+value)
+		}
+	}
 	providers := make([]string, 0, len(cfg.CI.SecretBindings))
 	for provider := range cfg.CI.SecretBindings {
 		providers = append(providers, provider)
@@ -1843,7 +1865,7 @@ func scopedCommandEnvironment(cfg model.Config, scope, home string) ([]string, [
 				continue
 			}
 			name := strings.ToUpper(binding.Environment)
-			if reserved[name] || strings.HasPrefix(name, "SAM_HARNESS_") || strings.HasPrefix(name, "GIT_") {
+			if reserved[name] || (strings.HasPrefix(name, "SAM_HARNESS_") && binding.Environment != jev.EnvKey) || strings.HasPrefix(name, "GIT_") {
 				return nil, nil, fmt.Errorf("secret binding environment %q is reserved for runtime isolation", binding.Environment)
 			}
 			if seen[binding.Environment] {

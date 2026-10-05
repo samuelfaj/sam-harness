@@ -126,7 +126,7 @@ If change-request publishing is enabled and separately authorized, CI sends that
 To upgrade a legacy production installation, provide the required current-version workflow decisions in an answers file:
 
 ```bash
-sam-harness upgrade /path/to/repository --to 0.10.0 --answers /tmp/sam-harness-v0.10-answers.json
+sam-harness upgrade /path/to/repository --to 0.11.0 --answers /tmp/sam-harness-v0.11-answers.json
 ```
 
 `upgrade` merges explicit answers over the installed configuration and produces an expiring plan; it does not apply it. Review unresolved decisions and every operation, then approve and apply the exact new plan ID. Use the [workflow configuration shape](skills/sam-harness/references/workflow-configuration.md) for the static/test guard coverage, provider secret-name, protected-agent-environment and agent-control-plane decisions, filesystem and trusted-command attestations, and lifecycle commands that legacy v0.1 production configuration does not contain.
@@ -157,6 +157,16 @@ Production and regulated planning requires every category in `static_guards` and
 Static and test phases run both discovered repository gates and configured guard commands. A waiver is auditable skipped evidence, not a passing check. Missing categories block planning instead of receiving guessed commands.
 
 Application also installs `.agents/skills/sam-harness-<lifecycle>/SKILL.md` for `classify`, `context`, `plan`, `implement`, `review`, `repair`, and `release`; managed `<workspace>/AGENTS.md` contracts for detected non-root workspaces; and `.github/pull_request_template.md` plus `.gitlab/merge_request_templates/sam-harness.md` with the evidence ladder and human-facing UX checklist. Load only the local skill for the current state and follow the closest `AGENTS.md`. Templates organize claims; they do not prove them.
+
+## Distill + OpenRouter + Jev
+
+Host `distill` runs review and correction through Distill with any OpenRouter model. Set three environment variables in the protected agent environment: `SAM_HARNESS_OPENROUTER_KEY` (required, the OpenRouter key), `SAM_HARNESS_OPENROUTER_MODEL` (required, the OpenRouter model id used for review and correction), and `SAM_HARNESS_OPENROUTER_JEV_MODEL` (optional, default `~typesafe/jev-latest`).
+
+- Reviewer command: `["sam-harness","agent","distill","review"]` (the planner recipe for host `distill`). Correction command: `["sam-harness","agent","distill","repair"]`.
+- Bind `SAM_HARNESS_OPENROUTER_KEY` in `ci.secret_bindings` for the `review` and `repair` scopes. The harness passes the key to agent commands only through that binding, which also turns on the trusted-command checks (`--config` outside the repository and `trusted_external_command: true`). The model variables pass through unbound.
+- The command writes a throwaway Distill config into a fresh temporary `HOME`, never touches your real `~/.distill`, and never prints the key.
+- When `SAM_HARNESS_OPENROUTER_KEY` is set, the harness asks Jev to skip reviewer roles whose domain the diff clearly does not touch (probability < 0.10). Skips are recorded in the receipt as `review_triage`. Any Jev error runs every role.
+- The expensive model can be any OpenRouter model, or another host such as `codex` or `claude-code`; Jev triage still applies.
 
 ## Profiles
 

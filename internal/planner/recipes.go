@@ -16,6 +16,8 @@ func ReviewerRecipe(host string) []string {
 		return []string{"claude", "--print", "--output-format", "json"}
 	case model.AgentHostGrok:
 		return []string{"grok", "review", "--json"}
+	case model.AgentHostDistill:
+		return []string{"sam-harness", "agent", "distill", "review"}
 	default:
 		return nil
 	}
