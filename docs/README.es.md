@@ -152,7 +152,7 @@ Si la publicación de change requests está habilitada y autorizada por separado
 Para actualizar una instalación de producción heredada, proporciona las decisiones obligatorias del workflow de la versión actual en un archivo de respuestas:
 
 ```bash
-sam-harness upgrade /ruta/al/repositorio --to 0.10.0 --answers /tmp/sam-harness-respuestas-v0.10.json
+sam-harness upgrade /ruta/al/repositorio --to 0.11.0 --answers /tmp/sam-harness-respuestas-v0.11.json
 ```
 
 `upgrade` combina las respuestas explícitas con la configuración instalada y produce un plan con caducidad; no lo aplica. Revisa las decisiones pendientes y todas las operaciones, después aprueba y aplica el nuevo ID exacto. Usa la [estructura de configuración del workflow](../skills/sam-harness/references/workflow-configuration.md) para la cobertura de guards `static`/`test`, las decisiones sobre nombres de secretos, entorno protegido de agentes y control plane del proveedor, las atestaciones del filesystem y del comando confiable, y los comandos del ciclo que una configuración heredada de producción v0.1 no contiene.
@@ -183,6 +183,16 @@ La planificación `production` y `regulated` exige que cada categoría de `stati
 Las fases `static` y `test` ejecutan tanto los controles descubiertos en el repositorio como los comandos configurados por categoría. Una exención es evidencia auditable de un elemento omitido, no un control aprobado. Las categorías ausentes bloquean el plan en vez de recibir comandos inventados.
 
 La aplicación también instala `.agents/skills/sam-harness-<lifecycle>/SKILL.md` para `classify`, `context`, `plan`, `implement`, `review`, `repair` y `release`; contratos `<workspace>/AGENTS.md` gestionados para workspaces no raíz detectados; y `.github/pull_request_template.md` junto con `.gitlab/merge_request_templates/sam-harness.md` con la escala de evidencia y el checklist de UX orientado a personas. Carga solo la skill local del estado actual y sigue el `AGENTS.md` más cercano. Las plantillas organizan afirmaciones; no las demuestran.
+
+## Distill + OpenRouter + Jev
+
+El host `distill` ejecuta revisión y corrección con Distill y cualquier modelo de OpenRouter. Define tres variables de entorno en el entorno protegido del agent: `SAM_HARNESS_OPENROUTER_KEY` (obligatoria, la clave de OpenRouter), `SAM_HARNESS_OPENROUTER_MODEL` (obligatoria, el id del modelo de OpenRouter usado en revisión y corrección) y `SAM_HARNESS_OPENROUTER_JEV_MODEL` (opcional, por defecto `~typesafe/jev-latest`).
+
+- Comando del revisor: `["sam-harness","agent","distill","review"]` (la receta del planner para el host `distill`). Comando de corrección: `["sam-harness","agent","distill","repair"]`.
+- Vincula `SAM_HARNESS_OPENROUTER_KEY` en `ci.secret_bindings` para los ámbitos `review` y `repair`. El harness solo pasa la clave a los comandos de agent mediante ese vínculo, que también activa las comprobaciones de comando de confianza (`--config` fuera del repositorio y `trusted_external_command: true`). Las variables de modelo pasan sin vínculo.
+- El comando escribe una configuración temporal de Distill en un `HOME` temporal nuevo, nunca toca tu `~/.distill` real y nunca imprime la clave.
+- Con `SAM_HARNESS_OPENROUTER_KEY` definida, el harness pide a Jev que omita los roles de revisión cuyo dominio el diff claramente no toca (probabilidad < 0,10). Las omisiones quedan en el recibo como `review_triage`. Cualquier error de Jev ejecuta todos los roles.
+- El modelo caro puede ser cualquier modelo de OpenRouter u otro host, como `codex` o `claude-code`; el triaje de Jev se sigue aplicando.
 
 ## Perfiles
 

@@ -3,6 +3,7 @@ package planner
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/samuelfaj/sam-harness/internal/model"
@@ -1118,4 +1119,19 @@ func contains(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func TestReviewerRecipeDistillUsesHarnessAgent(t *testing.T) {
+	t.Parallel()
+	got := strings.Join(ReviewerRecipe(model.AgentHostDistill), " ")
+	if got != "sam-harness agent distill review" {
+		t.Fatalf("ReviewerRecipe(distill) = %q", got)
+	}
+	if host, _, ok := model.ParseAgentHost("distill"); !ok || host != model.AgentHostDistill {
+		t.Fatalf("ParseAgentHost(distill) = %q, %v", host, ok)
+	}
+	runtime := model.CIAgentRuntime{Host: model.AgentHostDistill}
+	if !runtime.HostComplete() {
+		t.Fatal("distill host must be complete")
+	}
 }

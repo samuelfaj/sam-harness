@@ -27,8 +27,8 @@ func TestVersionPrintsHarnessVersion(t *testing.T) {
 	if stdout.String() != want {
 		t.Fatalf("version = %q, want %q", stdout.String(), want)
 	}
-	if model.HarnessVersion != "0.10.0" {
-		t.Fatalf("HarnessVersion = %q, want 0.10.0 for this release", model.HarnessVersion)
+	if model.HarnessVersion != "0.11.0" {
+		t.Fatalf("HarnessVersion = %q, want 0.11.0 for this release", model.HarnessVersion)
 	}
 }
 
@@ -847,4 +847,27 @@ func (s *scriptedTransport) Apply(mutations []bootstrap.Mutation) error {
 	cloned := append([]bootstrap.Mutation(nil), mutations...)
 	s.applied = append(s.applied, cloned)
 	return nil
+}
+
+func TestAgentDistillReviewRunsFakeDistill(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\ncat >/dev/null\necho '{\"structuredOutput\":{\"review_complete\":true,\"findings\":[]}}'\n"
+	if err := os.WriteFile(filepath.Join(dir, "distill"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SAM_HARNESS_OPENROUTER_KEY", "sk-test")
+	t.Setenv("SAM_HARNESS_OPENROUTER_MODEL", "vendor/model")
+	var stdout bytes.Buffer
+	command := New(&stdout, &bytes.Buffer{})
+	command.Stdin = strings.NewReader(`{"role":"security"}`)
+	if err := command.Run([]string{"agent", "distill", "review"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := stdout.String(); got != "{\"review_complete\":true,\"findings\":[]}\n" {
+		t.Fatalf("stdout = %q", got)
+	}
+	if err := command.Run([]string{"agent", "distill", "bogus"}); err == nil {
+		t.Fatal("unknown agent mode must fail")
+	}
 }

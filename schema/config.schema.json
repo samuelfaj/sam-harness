@@ -453,7 +453,7 @@
       "additionalProperties": false,
       "required": ["host", "login_method"],
       "properties": {
-        "host": { "enum": ["claude-code", "codex", "grok", "other"] },
+        "host": { "enum": ["claude-code", "codex", "grok", "distill", "other"] },
         "host_other": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
         "login_method": { "enum": ["api_key", "github_app", "oidc", "cli_token", "manual"] },
         "login_environment": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },

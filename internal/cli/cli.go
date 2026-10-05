@@ -16,6 +16,7 @@ import (
 	"github.com/samuelfaj/sam-harness/internal/bootstrap"
 	checkrun "github.com/samuelfaj/sam-harness/internal/check"
 	"github.com/samuelfaj/sam-harness/internal/config"
+	"github.com/samuelfaj/sam-harness/internal/distillagent"
 	"github.com/samuelfaj/sam-harness/internal/doctor"
 	"github.com/samuelfaj/sam-harness/internal/freeze"
 	"github.com/samuelfaj/sam-harness/internal/model"
@@ -28,13 +29,14 @@ import (
 )
 
 type CLI struct {
+	Stdin              io.Reader
 	Stdout             io.Writer
 	Stderr             io.Writer
 	BootstrapTransport bootstrap.Transport
 }
 
 func New(stdout, stderr io.Writer) *CLI {
-	return &CLI{Stdout: stdout, Stderr: stderr}
+	return &CLI{Stdin: os.Stdin, Stdout: stdout, Stderr: stderr}
 }
 
 func (c *CLI) Run(args []string) error {
@@ -73,6 +75,8 @@ func (c *CLI) Run(args []string) error {
 		return c.status(args[1:])
 	case "publish":
 		return c.publish(args[1:])
+	case "agent":
+		return c.agent(args[1:])
 	case "version", "--version", "-v":
 		fmt.Fprintf(c.Stdout, "sam-harness %s\n", model.HarnessVersion)
 		return nil
@@ -83,6 +87,13 @@ func (c *CLI) Run(args []string) error {
 		c.usage()
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func (c *CLI) agent(args []string) error {
+	if len(args) != 2 || args[0] != "distill" || (args[1] != "review" && args[1] != "repair") {
+		return errors.New("usage: sam-harness agent distill review|repair")
+	}
+	return distillagent.Run(args[1], c.Stdin, c.Stdout, c.Stderr)
 }
 
 func (c *CLI) scan(args []string) error {
@@ -1176,6 +1187,7 @@ Usage:
   sam-harness pipeline [path] [--config absolute-or-contained-file] [--gate name] [--review-base absolute-directory --review-base-sha hex --review-head-sha hex] [--prior-review-receipt file] [--risk low|medium|high|critical] --phase static|test|e2e|review|artifact|staging|production|observe|rollback|migration|all [--receipt true|false]
   sam-harness repair [path] [--config absolute-or-contained-file] --receipt file [--receipt-output true|false]
   sam-harness doctor [path] [--format human|json]
+  sam-harness agent distill review|repair   (reads the prompt on stdin; needs SAM_HARNESS_OPENROUTER_KEY and SAM_HARNESS_OPENROUTER_MODEL)
   sam-harness upgrade [path] --to version [--answers file] [--output file]
   sam-harness version
 
